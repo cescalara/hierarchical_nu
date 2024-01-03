@@ -23,7 +23,14 @@ from hierarchical_nu.utils.roi import (
     ROIList,
 )
 from hierarchical_nu.utils.plotting import SphericalCircle
-from hierarchical_nu.detector.icecube import Refrigerator
+from hierarchical_nu.detector.icecube import (
+    Refrigerator,
+    IC40,
+    IC59,
+    IC79,
+    IC86_I,
+    IC86_II,
+)
 from hierarchical_nu.detector.icecube import EventType
 
 import logging
@@ -232,6 +239,53 @@ class Events:
 
                 for key, value in zip(self._file_keys, self._file_values):
                     event_folder.create_dataset(key, data=value)
+
+    def to_icecube_tools(self):
+        """
+        Return `icecube_tools.utils.data.SimEvents` object from current events.
+        """
+
+        from icecube_tools.utils.data import SimEvents, dddict
+
+        it_types = np.unique([IC40.P, IC59.P, IC79.P, IC86_I.P, IC86_II.P])
+        hnu_types = np.unique([Refrigerator.stan2python(_) for _ in self._types])
+        # Check that only r2021 events are present
+        assert np.in1d(hnu_types, it_types)
+
+        reco_energies = dddict()
+        ang_errs = dddict()
+        ras = dddict()
+        decs = dddict()
+
+        fields = [reco_energies, ang_errs, ras, decs]
+        # create empty lists
+        for et in hnu_types:
+            for field in fields:
+                field[et] = []
+        coords = self.coords
+        coords.representation_type = "spherical"
+        for E, ang_err, coord, t in zip(
+            self.energies, self.ang_errs, coords, self.types
+        ):
+            p = Refrigerator.stan2python(t)
+            reco_energies[p].append(E.to_value(u.GeV))
+            ang_errs[p].append(ang_err.to_value(u.deg))
+            ras[p].append(coord.ra.rad)
+            decs[p].append(coord.dec.rad)
+
+        for et in hnu_types:
+            ras[et] = np.array(ras[et])
+            decs[et] = np.array(decs[et])
+            ang_errs[et] = np.array(ang_errs[et])
+            reco_energies[et] = np.array(reco_energies[et])
+
+        events = SimEvents()
+        events._ra = ras
+        events._dec = decs
+        events._reco_energy = reco_energies
+        events._ang_err = ang_errs
+
+        return events
 
     @classmethod
     def from_ev_file(cls, *seasons: EventType):
