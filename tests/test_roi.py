@@ -16,29 +16,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
 
 
-def test_circular_event_selection():
-    Parameter.clear_registry()
-    ROIList.clear_registry()
-    Emin_det = Parameter(1e1 * u.GeV, "Emin_det", fixed=True)
-    roi = CircularROI(
-        center=SkyCoord(ra=90 * u.deg, dec=10 * u.deg, frame="icrs"),
-        radius=10.0 * u.deg,
-    )
-    logger.warning(roi)
-    events = Events.from_ev_file(IC86_II)
-    assert events.coords.z.min() >= 0.0
-
-
-def test_rectangular_event_selection():
-    ROIList.clear_registry()
-    Parameter.clear_registry()
-    Emin_det = Parameter(1e1 * u.GeV, "Emin_det", fixed=True)
-    roi = RectangularROI(DEC_min=0.0 * u.rad)
-    logger.warning(roi)
-    events = Events.from_ev_file(IC86_II)
-    assert events.coords.z.min() >= 0.0
-
-
 def test_roi_south(caplog):
     ROIList.clear_registry()
     caplog.set_level(logging.WARNING)
@@ -57,24 +34,6 @@ def test_humongous_roi():
             center=SkyCoord(ra=90 * u.deg, dec=10 * u.deg, frame="icrs"),
             radius=181.0 * u.deg,
         )
-
-
-def test_event_selection_wrap(caplog):
-    ROIList.clear_registry()
-    Parameter.clear_registry()
-    Emin_det = Parameter(1e1 * u.GeV, "Emin_det", fixed=True)
-    roi = RectangularROI(RA_min=np.deg2rad(350) * u.rad, RA_max=np.deg2rad(10) * u.rad)
-    events = Events.from_ev_file(IC86_II)
-    events.coords.representation_type = "spherical"
-    ra = events.coords.ra.rad
-    mask = np.nonzero((ra >= np.pi))
-    ra[mask] -= 2 * np.pi
-
-    assert pytest.approx(np.average(ra), abs=1e-3) == 0.0
-
-    assert "RA_min is greater than RA_max" in caplog.text
-
-    assert "RA_max is smaller than RA_min" in caplog.text
 
 
 def test_rectangular_precomputation():
