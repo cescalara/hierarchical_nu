@@ -49,33 +49,3 @@ def test_short_run_r2021(output_directory, random_seed):
 
     # Clear config
     _local_config_file.unlink()
-
-
-"""
-def test_short_run_icecube(output_directory, random_seed):
-    # Edit configuration and save
-    hnu_config["parameter_config"]["detector_model_type"] = "icecube"
-    hnu_config["parameter_config"]["src_index"] = 2.0
-    hnu_config["parameter_config"]["L"] = 1e47
-    hnu_config["parameter_config"]["diff_norm"] = 1e-13
-    hnu_config["parameter_config"]["Emin_det_tracks"] = 1e5
-    hnu_config["parameter_config"]["obs_time"] = 1
-
-    with _local_config_file.open("w") as f:
-        OmegaConf.save(config=hnu_config, f=f.name)
-
-    ModelCheck.initialise_env(output_dir=output_directory)
-
-    model_check = run_model_check(output_directory, random_seed)
-
-    # Check diagnostics
-    ind_not_ok = model_check.diagnose()
-    assert len(ind_not_ok) == 0
-
-    # Check visualisations
-    for p in [True, False]:
-        fig, ax = model_check.compare(show_prior=p)
-
-    # Clear config
-    _local_config_file.unlink()
-"""

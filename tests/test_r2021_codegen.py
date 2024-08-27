@@ -108,11 +108,6 @@ class TestR2021:
                     f"vector[{R2021EnergyResolution._log_tE_grid.size}]",
                     ["[size]"],
                 )
-                # ereco_idx = ForwardArrayDef("ereco_idx", "int", ["[", size, "]"])
-                # ereco = ForwardArrayDef("reco_energy", "real", ["[", size, "]"])
-                # phi = ForwardVariableDef("phi", "real")
-                # theta = ForwardVariableDef("theta", "real")
-                # add the eres slice for each event here
 
             with ParametersContext():
                 true_energy = ParameterDef("true_energy", "real", 2.0, 8.0)
@@ -121,11 +116,7 @@ class TestR2021:
                 lp = ForwardArrayDef("lp", "real", ["[", size, "]"])
                 with ForLoopContext(1, size, "i") as i:
                     lp[i] << StringExpression(
-                        [
-                            #     "IC86_IIEnergyResolution(true_energy, reco_energy[i], [sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)]', ereco_idx[i])"
-                            # "IC86_IIEnergyResolution(true_energy, reco_energy[i], [sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)]')"
-                            "IC86_IIEnergyResolution(true_energy, eres_grid[i])"
-                        ]
+                        ["IC86_IIEnergyResolution(true_energy, eres_grid[i])"]
                     )
 
             with ModelContext():
@@ -158,7 +149,6 @@ class TestR2021:
         )
 
         stanc_options = {"include-paths": [STAN_PATH, os.path.dirname(sim_file)]}
-        # model_file = os.path.join(model_dir, "r2021")
         # Compile model
         stan_model = CmdStanModel(
             stan_file=sim_file,
@@ -206,7 +196,6 @@ class TestR2021:
     def test_everything(self, test_samples, model_file, random_seed):
         # Generate model for fitting
         stanc_options = {"include-paths": [STAN_PATH, os.path.dirname(model_file)]}
-        # model_file = os.path.join(model_dir, "r2021")
         # Compile model
         stan_model = CmdStanModel(
             stan_file=model_file,
@@ -237,9 +226,6 @@ class TestR2021:
                     "phi": phi,
                     "reco_energy": ereco,
                     "size": size,
-                    # "ereco_idx": np.digitize(
-                    #     ereco, R2021GridInterpEnergyResolution._logEreco_grid_edges
-                    # ),
                     "eres_grid": eres_grid,
                 }
 
