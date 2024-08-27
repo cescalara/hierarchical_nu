@@ -8,7 +8,12 @@ from hierarchical_nu.priors import (
     FluxPrior,
 )
 from hierarchical_nu.utils.config import HierarchicalNuConfig
-from hierarchical_nu.source.source import Sources, PointSource, SourceFrame, DetectorFrame
+from hierarchical_nu.source.source import (
+    Sources,
+    PointSource,
+    SourceFrame,
+    DetectorFrame,
+)
 from hierarchical_nu.source.parameter import Parameter
 from hierarchical_nu.detector.icecube import Refrigerator
 from hierarchical_nu.utils.roi import (
@@ -46,7 +51,7 @@ class ConfigParser:
         if not share_src_index:
             for c, (idx, idx_beta) in enumerate(
                 zip(
-                    parameter_config["src_index"], 
+                    parameter_config["src_index"],
                     parameter_config["beta_index"],
                 )
             ):
@@ -221,7 +226,6 @@ class ConfigParser:
             F_atmo = Parameter.get_parameter("F_atmo")
             F_atmo.par_range = parameter_config.F_atmo_range * (1 / u.m**2 / u.s)
 
-
         self._sources = sources
 
         return sources
@@ -326,14 +330,6 @@ class ConfigParser:
                         "Empty dm list, change MJD or dm selection to sensible values."
                     )
             return _time
-
-    @property
-    def events(self):
-        _events = Events.from_ev_file(
-            *self.detector_model,
-            scramble_ra=self._hnu_config.parameter_config.scramble_ra,
-        )
-        return _events
 
     def create_simulation(self, sources, detector_models, obs_time):
         asimov = self._hnu_config.parameter_config.asimov
