@@ -131,8 +131,11 @@ class StanFit:
         if self._sources.point_source:
             self._def_var_names.append("L")
             self._def_var_names.append("src_index")
-            
-            if isinstance(self._sources.point_source[0].flux_model.spectral_shape, LogParabolaSpectrum):
+
+            if isinstance(
+                self._sources.point_source[0].flux_model.spectral_shape,
+                LogParabolaSpectrum,
+            ):
                 self._def_var_names.append("beta_index")
 
         if self._sources.diffuse:
@@ -163,6 +166,8 @@ class StanFit:
         except ValueError:
             self._shared_src_index = False
 
+        self._fit_output = None
+
     @property
     def priors(self):
         return self._priors
@@ -192,6 +197,11 @@ class StanFit:
             self._events = events
         else:
             raise ValueError("events must be instance of Events")
+
+    @property
+    def fit_output(self):
+
+        return self._fit_output
 
     def precomputation(
         self,
@@ -575,7 +585,12 @@ class StanFit:
                         ls="--",
                     )
 
-        ax.text(1e7, yhigh, "$\hat E$", fontsize=8.,)
+        ax.text(
+            1e7,
+            yhigh,
+            "$\hat E$",
+            fontsize=8.0,
+        )
 
         ax.set_xlabel(r"$E~[\mathrm{GeV}]$")
         ax.set_ylabel("pdf")
@@ -797,9 +812,9 @@ class StanFit:
         self,
         E_power: float = 1.0,
         credible_interval: Union[float, List[float]] = 0.5,
-        energy_unit = u.TeV,
-        area_unit = u.cm**2,
-        x_energy_unit = u.GeV
+        energy_unit=u.TeV,
+        area_unit=u.cm**2,
+        x_energy_unit=u.GeV,
     ):
         """
         Plot flux uncertainties.
@@ -820,8 +835,7 @@ class StanFit:
         share_index = len(shape) == 2
 
         logparabola = isinstance(
-            self._sources.point_source[0].flux_model.spectral_shape,
-            LogParabolaSpectrum
+            self._sources.point_source[0].flux_model.spectral_shape, LogParabolaSpectrum
         )
 
         if logparabola:
@@ -867,14 +881,17 @@ class StanFit:
                 if logparabola:
                     ps.flux_model.spectral_shape.set_parameter("beta", beta_vals[c])
 
-                flux = ps.flux_model.spectral_shape(E).to_value(
-                    flux_unit
-                )
+                flux = ps.flux_model.spectral_shape(E).to_value(flux_unit)
 
                 # Needs to be in units used by stan
                 int_flux = ps.flux_model.total_flux_int.to_value(1 / u.m**2 / u.s)
 
-                flux_grid[:, c] = flux / int_flux * flux_int[c] * np.power(E.to_value(energy_unit), E_power)
+                flux_grid[:, c] = (
+                    flux
+                    / int_flux
+                    * flux_int[c]
+                    * np.power(E.to_value(energy_unit), E_power)
+                )
 
             self._flux_grid = flux_grid
 
@@ -906,7 +923,9 @@ class StanFit:
         ax.set_yscale("log")
 
         ax.set_xlabel(f"$E$ [{x_energy_unit.to_string('latex_inline')}]")
-        ax.set_ylabel(f"flux [{(energy_unit**E_power * flux_unit).unit.to_string('latex_inline')}]")
+        ax.set_ylabel(
+            f"flux [{(energy_unit**E_power * flux_unit).unit.to_string('latex_inline')}]"
+        )
 
         return fig, ax
 
@@ -1016,7 +1035,7 @@ class StanFit:
 
         # Add priors separately
         self.priors.addto(path, "priors")
-        
+
     def diagnose(self):
         try:
             print(self._fit_output.diagnose().decode("ascii"))
@@ -1098,7 +1117,7 @@ class StanFit:
         if "src_index_grid" in fit_inputs.keys():
             fit._def_var_names.append("L")
             fit._def_var_names.append("src_index")
-            
+
         if "beta_index_grid" in fit_inputs.keys():
             fit._def_var_names.append("beta_index")
 
@@ -1349,15 +1368,15 @@ class StanFit:
         if self._sources.point_source:
             fit_inputs["Emin_src"] = [
                 ps.frame.transform(
-                    Parameter.get_parameter("Emin_src").value,
-                    ps.redshift
-                ).to_value(u.GeV) for ps in self._sources.point_source
+                    Parameter.get_parameter("Emin_src").value, ps.redshift
+                ).to_value(u.GeV)
+                for ps in self._sources.point_source
             ]
             fit_inputs["Emax_src"] = [
                 ps.frame.transform(
-                    Parameter.get_parameter("Emax_src").value,
-                    ps.redshift
-                ).to_value(u.GeV) for ps in self._sources.point_source
+                    Parameter.get_parameter("Emax_src").value, ps.redshift
+                ).to_value(u.GeV)
+                for ps in self._sources.point_source
             ]
 
         fit_inputs["Emin"] = Parameter.get_parameter("Emin").value.to_value(u.GeV)
@@ -1366,11 +1385,11 @@ class StanFit:
         if self._sources.diffuse:
             fit_inputs["Emin_diff"] = self._sources.diffuse.frame.transform(
                 Parameter.get_parameter("Emin_diff").value,
-                self._sources.diffuse.redshift
+                self._sources.diffuse.redshift,
             ).to_value(u.GeV)
             fit_inputs["Emax_diff"] = self._sources.diffuse.frame.transform(
                 Parameter.get_parameter("Emax_diff").value,
-                self._sources.diffuse.redshift
+                self._sources.diffuse.redshift,
             ).to_value(u.GeV)
 
         integral_grid = []
@@ -1431,9 +1450,8 @@ class StanFit:
                 fit_inputs["beta_index_min"] = self._beta_index_par_range[0]
                 fit_inputs["beta_index_max"] = self._beta_index_par_range[1]
                 fit_inputs["E0"] = [
-                        ps.flux_model.spectral_shape._normalisation_energy.to_value(
-                            u.GeV
-                        ) for ps in self._sources.point_source
+                    ps.flux_model.spectral_shape._normalisation_energy.to_value(u.GeV)
+                    for ps in self._sources.point_source
                 ]
                 fit_inputs["beta_index_mu"] = self._priors.beta_index.mu
                 fit_inputs["beta_index_sigma"] = self._priors.beta_index.sigma
@@ -1443,8 +1461,6 @@ class StanFit:
             raise ValueError("No other prior type for source index implemented.")
         fit_inputs["src_index_mu"] = self._priors.src_index.mu
         fit_inputs["src_index_sigma"] = self._priors.src_index.sigma
-
-
 
         if self._priors.luminosity.name == "lognormal":
             fit_inputs["lumi_mu"] = self._priors.luminosity.mu
@@ -1614,7 +1630,7 @@ class StanFit:
             integral_grid.append([])
             integral_grid_2d.append([])
             for grid in self._exposure_integral[event_type].integral_grid:
-                
+
                 if len(grid.shape) == 2:
                     integral_grid_2d[-1].append(np.log(grid.to_value(u.m**2)).tolist())
 
