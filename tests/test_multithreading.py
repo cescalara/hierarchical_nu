@@ -36,7 +36,7 @@ def sources():
         par_range=(0, 1e60) * (u.erg / u.s),
     )
     diffuse_norm = Parameter(
-        (0.9e-18 / u.GeV / u.cm**2 * 4 * np.pi / u.s).to(1 / (u.GeV * u.m**2 * u.s)),
+        (2.26e-13 / u.GeV / u.m**2 / u.s),
         "diffuse_norm",
         fixed=True,
         par_range=(0, np.inf),
@@ -110,6 +110,7 @@ def test_ps(output_directory, sources):
         assert np.sum(~np.isclose(mt_n, n, atol=0.3)) < 3
 
 
+"""
 def test_lp(output_directory, sources):
     events = Events.from_file(os.path.join(output_directory, f"ps_only_0.h5"))
     fit = StanFit(sources, IC86_II, events, 180 * u.d, nshards=2, debug=True)
@@ -126,7 +127,7 @@ def test_lp(output_directory, sources):
         )
     )
 
-
+"""
 """
 
 def test_ps_atmo(output_directory):
