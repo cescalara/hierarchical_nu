@@ -84,6 +84,9 @@ class ConfigParser:
         index = []
         beta = []
         E0_src = []
+        eta = []
+        P = []
+
         if (
             parameter_config["source_type"] == "power-law"
             or parameter_config["source_type"] == "twice-broken-power-law"
@@ -193,6 +196,36 @@ class ConfigParser:
                     )
                 )
 
+        if parameter_config.source_type == "SeyfertII" and share_src_index:
+            name = "eta"
+            eta.append(
+                Parameter(
+                    parameter_config.eta[0],
+                    name,
+                    False,
+                    parameter_config.eta_range,
+                    ParScale.lin,
+                )
+            )
+
+        elif parameter_config.source_type == "SeyfertII":
+            for c, val in enumerate(parameter_config.eta):
+                name = f"ps_{c}_eta"
+                eta.append(
+                    Parameter(
+                        val,
+                        name,
+                        False,
+                        parameter_config.eta_range,
+                        ParScale.lin,
+                    )
+                )
+
+        if "Nex_src" in parameter_config["fit_params"]:
+            Nex_src = Parameter(
+                0.0, "Nex_src", fixed=True, par_range=parameter_config["Nex_src_range"]
+            )
+
         diff_index = Parameter(
             parameter_config["diff_index"],
             "diff_index",
@@ -200,7 +233,10 @@ class ConfigParser:
             par_range=parameter_config["diff_index_range"],
         )
         L = []
-        if not share_L:
+        # P acts as luminosity? I guess
+        # reuse share_L for P
+        P = []
+        if not share_L and not parameter_config.source_type == "SeyfertII":
             for c, Lumi in enumerate(parameter_config["L"]):
                 name = f"ps_{c}_luminosity"
                 L.append(
@@ -215,13 +251,13 @@ class ConfigParser:
                         * (u.GeV / u.s),
                     )
                 )
-        else:
+        elif not parameter_config.source_type == "SeyfertII":
             L.append(
                 Parameter(
                     u.Quantity(parameter_config["L"][0]),
                     "luminosity",
-                    False,
-                    tuple(
+                    fixed=True,
+                    par_range=tuple(
                         u.Quantity(_).to_value(u.GeV / u.s)
                         for _ in parameter_config["L_range"]
                     )
@@ -229,6 +265,27 @@ class ConfigParser:
                     / u.s,
                 )
             )
+        elif share_L:
+            P.append(
+                Parameter(
+                    parameter_config.P[0],
+                    "pressure_ratio",
+                    fixed=True,
+                    par_range=parameter_config.P_range,
+                )
+            )
+        else:
+            for c, pressure in parameter_config.P:
+                name = f"ps_{c}_pressure_ratio"
+                P.append(
+                    Parameter(
+                        pressure,
+                        name,
+                        fixed=True,
+                        par_range=parameter_config.P_range,
+                    )
+                )
+
         diffuse_norm = Parameter(
             u.Quantity(parameter_config["diff_norm"]),
             "diffuse_norm",
@@ -295,16 +352,22 @@ class ConfigParser:
         sources = Sources()
 
         for c in range(len(dec)):
-            if share_L:
+            if share_L and not parameter_config.source_type == "SeyfertII":
                 Lumi = L[0]
-            else:
+            elif not parameter_config.source_type == "SeyfertII":
                 Lumi = L[c]
+            elif share_L:
+                _P = P[0]
+            else:
+                _P = P[c]
 
             if share_src_index:
                 if index and "src_index" in parameter_config["fit_params"]:
                     idx = index[0]
                 elif parameter_config.source_type == "pgamma":
                     pass
+                elif parameter_config.source_type == "SeyfertII":
+                    _eta = eta[0]
                 else:
                     idx = index[c]
                 if beta and "beta_index" in parameter_config["fit_params"]:
@@ -322,7 +385,9 @@ class ConfigParser:
                     idx_beta = beta[c]
                 if E0_src:
                     E0 = E0_src[c]
-            if not parameter_config.source_type == "pgamma":
+                if eta:
+                    _eta = eta[c]
+            if parameter_config.source_type not in ("pgamma", "SeyfertII"):
                 args = (
                     f"ps_{c}",
                     dec[c],
@@ -366,9 +431,27 @@ class ConfigParser:
                     Emax_src,
                     frame,
                 )
+            elif parameter_config.source_type == "SeyfertII":
+                method = PointSource.make_seyfert_source
+                args = (
+                    f"ps_{c}",
+                    dec[c],
+                    ra[c],
+                    _P,
+                    _eta,
+                    parameter_config.z[c],
+                    frame,
+                )
             point_source = method(*args)
 
             sources.add(point_source)
+
+        if (
+            parameter_config.diffuse or parameter_config.diffuse
+        ) and parameter_config.data_bg:
+            raise ValueError(
+                "Cannot combine physical background model with data-driven background model."
+            )
 
         if parameter_config.diffuse:
             sources.add_diffuse_component(
@@ -384,6 +467,9 @@ class ConfigParser:
                 u.Quantity(_).to_value(1 / u.m**2 / u.s)
                 for _ in parameter_config.F_atmo_range
             ) * (1 / u.m**2 / u.s)
+
+        if parameter_config.data_bg:
+            sources.add_background(*self.detector_model)
 
         self._sources = sources
 
@@ -600,7 +686,15 @@ class ConfigParser:
         priors = Priors()
         prior_config = self._hnu_config.prior_config
 
-        def _make_prior(multiparameterprior, parameterprior, prior, mu, sigma):
+        def _make_prior(
+            multiparameterprior,
+            parameterprior,
+            prior,
+            mu,
+            sigma,
+            mu_unit: bool,
+            sigma_unit: bool,
+        ):
             if not isinstance(mu, omegaconf.listconfig.ListConfig) and not isinstance(
                 mu, list
             ):
@@ -609,6 +703,11 @@ class ConfigParser:
                 sigma, omegaconf.listconfig.ListConfig
             ) and not isinstance(sigma, list):
                 sigma = [sigma]
+
+            if mu_unit:
+                mu = [u.Quantity(_) for _ in mu]
+            if sigma_unit:
+                sigma = [u.Quantity(_) for _ in sigma]
             if len(mu) > 1 and len(sigma) > 1:
                 return multiparameterprior(
                     [parameterprior(prior, mu=m, sigma=s) for m, s in zip(mu, sigma)]
@@ -629,10 +728,12 @@ class ConfigParser:
                 prior = NormalPrior
                 mu = vals.mu
                 sigma = vals.sigma
+                sigma_unit = True
             elif vals.name == "LogNormalPrior":
                 prior = LogNormalPrior
                 mu = vals.mu
                 sigma = vals.sigma
+                sigma_unit = False
             elif vals.name == "ParetoPrior":
                 prior = ParetoPrior
                 xmin = vals.xmin
@@ -644,26 +745,30 @@ class ConfigParser:
                 self.check_units(mu, 1)
                 self.check_units(sigma, 1)
                 priors.src_index = _make_prior(
-                    MultiSourceIndexPrior, IndexPrior, prior, mu, sigma
+                    MultiSourceIndexPrior, IndexPrior, prior, mu, sigma, False, False
                 )
             elif p == "beta_index":
                 self.check_units(mu, 1)
                 self.check_units(sigma, 1)
                 priors.beta_index = _make_prior(
-                    MultiSourceIndexPrior, IndexPrior, prior, mu, sigma
+                    MultiSourceIndexPrior, IndexPrior, prior, mu, sigma, False, False
                 )
             elif p == "E0_src":
                 self.check_units(mu, u.GeV)
-                mu = [u.Quantity(_) for _ in mu]
                 if prior == NormalPrior:
                     self.check_units(sigma, u.GeV)
-                    sigma = [u.Quantity(_) for _ in sigma]
                 elif prior == LogNormalPrior:
                     self.check_units(sigma, 1)
                 else:
                     raise NotImplementedError("Prior not recognised for E0_src.")
                 priors.E0_src = _make_prior(
-                    MultiSourceEnergyPrior, EnergyPrior, prior, mu, sigma
+                    MultiSourceEnergyPrior,
+                    EnergyPrior,
+                    prior,
+                    mu,
+                    sigma,
+                    True,
+                    sigma_unit,
                 )
             elif p == "L":
                 if prior == ParetoPrior:
@@ -675,16 +780,20 @@ class ConfigParser:
                     continue
 
                 self.check_units(mu, u.GeV / u.s)
-                mu = [u.Quantity(_) for _ in mu]
                 if prior == NormalPrior:
                     self.check_units(sigma, u.GeV / u.s)
-                    sigma = [u.Quantity(_) for _ in sigma]
                 elif prior == LogNormalPrior:
                     self.check_units(sigma, 1)
                 else:
                     raise NotImplementedError("Prior not recognised for E0_src.")
                 priors.luminosity = _make_prior(
-                    MultiSourceLuminosityPrior, LuminosityPrior, prior, mu, sigma
+                    MultiSourceLuminosityPrior,
+                    LuminosityPrior,
+                    prior,
+                    mu,
+                    sigma,
+                    True,
+                    sigma_unit,
                 )
 
             elif p == "diff_index":

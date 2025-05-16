@@ -15,10 +15,11 @@ from .flux_model import (
     PGammaSpectrum,
 )
 from .atmospheric_flux import AtmosphericNuMuFlux
+from .seyfert_model import SeyfertNuMuSpectrum
 from .cosmology import luminosity_distance
 from .parameter import Parameter, ParScale
 from ..utils.config import HierarchicalNuConfig
-from ..backend.stan_generator import UserDefinedFunction
+from ..detector.r2021_bg_llh import R2021BackgroundLLH
 
 import logging
 
@@ -106,7 +107,7 @@ class Source(ABC):
     def __init__(self, name: str, frame: ReferenceFrame, *args, **kwargs):
         self._name = name
         self._frame = frame
-        self._parameters = []
+        self._parameters = {}
         self._flux_model = None
 
     @property
@@ -144,6 +145,7 @@ class PointSource(Source):
         redshift: float
         spectral_shape:
             Spectral shape of the source. Should return units 1/(GeV cm^2 s)
+        frame: Instance of `ReferenceFrame` in which energies are defined
     """
 
     @u.quantity_input
@@ -475,6 +477,44 @@ class PointSource(Source):
         return cls(name, dec, ra, redshift, spectral_shape, frame)
 
     @classmethod
+    def make_seyfert_source(
+        cls,
+        name: str,
+        dec: u.rad,
+        ra: u.rad,
+        P: Parameter,
+        eta: Parameter,
+        redshift: float,
+        # lower: Parameter,
+        # upper: Parameter,
+        frame: ReferenceFrame = DetectorFrame,
+    ):
+        """
+        Create source with Seyfert II neutrino flux.
+        Parameters:
+            name: str
+                Source name
+            dec: u.rad,
+                Declination of the source
+            ra: u.rad,
+                Right Ascension of the source
+            P: Parameter,
+                Cosmic ray pressure to thermal pressure ratio, acts as normalisation
+            eta: Parameter
+                Inverse magnetic turbulence strength
+            redshift: float
+            lower: Parameter
+                Lower energy bound
+            upper: Parameter
+                Upper energy bound
+            frame: ReferenceFrame
+                Reference frame in which source energy is defined
+        """
+
+        spectral_shape = SeyfertNuMuSpectrum(P, eta)
+        return cls(name, dec, ra, redshift, spectral_shape, frame)
+
+    @classmethod
     def _make_sources_from_file(
         cls,
         file_name: str,
@@ -764,6 +804,26 @@ class DiffuseSource(Source):
         self._redshift = value
 
 
+class BackgroundSource(Source):
+    """
+    Class that models background with data
+    """
+
+    def __init__(self, name, *detector_model):
+        from ..detector.r2021_bg_llh import R2021BackgroundLLH
+
+        super().__init__(name, DetectorFrame)
+        self._name = name
+        self._flux_model = None
+        self._detector_model = detector_model
+
+        self._likelihoods = {_: R2021BackgroundLLH(_.P) for _ in detector_model}
+        self._frame = DetectorFrame
+
+    def flux(self):
+        raise NotImplementedError("Data-driven background model has no flux.")
+
+
 class Sources:
     """
     Container for sources with a set of factory methods
@@ -776,7 +836,7 @@ class Sources:
 
     def __len__(self):
         return len(self.sources)
-    
+
     @property
     def N(self):
         return len(self)
@@ -938,6 +998,9 @@ class Sources:
 
         self.add(atmospheric_component)
 
+    def add_background(self, *detector_model):
+        self.add(BackgroundSource("bg", *detector_model))
+
     def select(self, mask: npt.NDArray[np.bool_], only_point_sources: bool = False):
         """
         Select some subset of existing sources by providing a mask.
@@ -966,6 +1029,7 @@ class Sources:
             # Add back diffuse and atmospheric components
             _sources.append(self.diffuse)
             _sources.append(self.atmospheric)
+            _sources.append(self.background)
 
         else:
             assert len(mask) == self.N
@@ -1064,6 +1128,7 @@ class Sources:
         self._point_source = []
         self._diffuse = None
         self._atmospheric = None
+        self._background = None
 
         for source in self.sources:
             if isinstance(source, PointSource):
@@ -1075,6 +1140,8 @@ class Sources:
 
                 elif isinstance(source.flux_model, AtmosphericNuMuFlux):
                     self._atmospheric = source
+            elif isinstance(source, BackgroundSource):
+                self._background = source
 
         if self._point_source:
             self._get_point_source_spectrum()
@@ -1087,6 +1154,9 @@ class Sources:
 
         if self._atmospheric:
             new_list.append(self._atmospheric)
+
+        if self._background:
+            new_list.append(self._background)
 
         self.sources = new_list
 
@@ -1144,13 +1214,22 @@ class Sources:
 
         return self._atmospheric.flux_model
 
+    @property
+    def background(self):
+        self.organise()
+
+        return self._background
+
+    @property
+    def background_flux(self):
+        raise NotImplementedError()
+
     def __iter__(self):
         for source in self._sources:
             yield source
 
     def __getitem__(self, key):
         return self._sources[key]
-    
 
     def __bool__(self):
         return bool(len(self))
