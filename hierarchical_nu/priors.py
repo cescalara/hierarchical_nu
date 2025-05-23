@@ -221,6 +221,29 @@ class ParetoPrior(PriorDistribution):
         return prior_dict
 
 
+class NoPriorSetError(Exception):
+    pass
+
+
+class Ignorance(PriorDistribution):
+    def __init__(self, name="notaprior", **kwargs):
+        super().__init__(name=name)
+
+    def pdf(self, x):
+        raise NoPriorSetError("Ignorance is bliss, but has no pdf")
+
+    def pdf_logspace(self, x):
+        raise NoPriorSetError("Ignorance is your new best friend, but has no pdf")
+
+    def sample(self, N):
+        raise NoPriorSetError(
+            "I am running out of references, anyway, Ignorance cannot be sampled from"
+        )
+
+    def to_dict(self, units):
+        return dict(name=self._name, units=units)
+
+
 class ExponentialGaussianPrior(PriorDistribution):
     def __init__(self, name="exponnorm", mu=0.0, sigma=1.0, lam=1.0):
         super().__init__(name)
@@ -284,6 +307,8 @@ class PriorDictHandler:
             "diff_index": IndexPrior,
             "E0_src": EnergyPrior,
             "ang_sys": AngularPrior,
+            "eta": EtaPrior,
+            "pressure_ratio": PressureRatioPrior,
         }
         prior_name = prior_dict["name"]
         prior = translate[prior_dict["quantity"]]
@@ -295,8 +320,9 @@ class PriorDictHandler:
         if prior_name == "logflat":
             xmin = prior_dict["xmin"]
             xmax = prior_dict["xmax"]
-        mu = prior_dict["mu"]
-        sigma = prior_dict["sigma"]
+            return prior(LogUniformPrior, xmin=xmin * units, xmax=xmax * units)
+        elif prior_name == "notaprior":
+            return prior(Ignorance)
         mu = np.atleast_1d(prior_dict["mu"])
         sigma = np.atleast_1d(prior_dict["sigma"])
         if prior_name == "normal":
@@ -305,8 +331,6 @@ class PriorDictHandler:
             return prior(NormalPrior, mu=mu[0], sigma=sigma[0])
         elif prior_name == "lognormal":
             return prior(LogNormalPrior, mu=np.exp(mu[0]) * units, sigma=sigma[0])
-        elif prior_name == "logflat":
-            return prior(LogUniformPrior, xmin=xmin * units, xmax=xmax * units)
 
 
 class UnitPrior:
@@ -441,6 +465,9 @@ class UnitlessPrior:
     Class to handle priors on unitless parameters.
     """
 
+    UNITS = 1
+    UNITS_STRING = "1"
+
     def __init__(self, name, **kwargs):
         if name == ParetoPrior:
             alpha = kwargs.get("alpha")
@@ -454,6 +481,8 @@ class UnitlessPrior:
                 self._prior = name(mu=np.log(mu), sigma=sigma)
             elif name == NormalPrior:
                 self._prior = name(mu=mu, sigma=sigma)
+            elif name == Ignorance:
+                self._prior = name()
 
     @property
     def mu(self):
@@ -621,9 +650,6 @@ class IndexPrior(UnitlessPrior):
     Spectral index or curvature (for logparabola) prior
     """
 
-    UNITS = 1
-    UNITS_STRING = "1"
-
     @u.quantity_input
     def __init__(
         self,
@@ -631,6 +657,22 @@ class IndexPrior(UnitlessPrior):
         mu: float = 2.5,
         sigma: float = 0.5,
     ):
+        super().__init__(name, mu=mu, sigma=sigma, units=self.UNITS)
+
+
+class PressureRatioPrior(UnitlessPrior):
+    """
+    Prior on the pressure ratio in the corona of Seyfert galaxies
+    """
+
+    @u.quantity_input
+    def __init__(self, name=Ignorance, mu: float = 0.2, sigma: float = 0.1):
+        super().__init__(name, mu=mu, sigma=sigma, units=self.UNITS)
+
+
+class EtaPrior(UnitlessPrior):
+    @u.quantity_input
+    def __init__(self, name=Ignorance, mu: float = 40, sigma: float = 10):
         super().__init__(name, mu=mu, sigma=sigma, units=self.UNITS)
 
 
@@ -727,6 +769,34 @@ class MultiSourceEnergyPrior(MultiSourcePrior, EnergyPrior):
         return np.array([_.sigma for _ in self._priors])
 
 
+class MultiSourcePressureRatioPrior(MultiSourcePrior, PressureRatioPrior):
+    def __init__(self, priors: Iterable[PressureRatioPrior]):
+        assert all(isinstance(_, PressureRatioPrior) for _ in priors)
+        super().__init__(priors)
+
+    @property
+    def mu(self):
+        return np.array([_.mu for _ in self._priors])
+
+    @property
+    def sigma(self):
+        return np.array([_.sigma for _ in self._priors])
+
+
+class MultiSourceEtaPrior(MultiSourcePrior, EtaPrior):
+    def __init__(self, priors):
+        assert all(isinstance(_, EtaPrior) for _ in priors)
+        super().__init__(priors)
+
+    @property
+    def mu(self):
+        return np.array([_.mu for _ in self._priors])
+
+    @property
+    def sigma(self):
+        return np.array([_.sigma for _ in self._priors])
+
+
 class Priors(object):
     """
     Container for model priors.
@@ -750,7 +820,31 @@ class Priors(object):
 
         self.E0_src = EnergyPrior()
 
+        self.pressure_ratio = PressureRatioPrior()
+
+        self.eta = EtaPrior()
+
         self.ang_sys = AngularPrior()
+
+    @property
+    def pressure_ratio(self):
+        return self._pressure_ratio
+
+    @pressure_ratio.setter
+    def pressure_ratio(self, prior: PressureRatioPrior):
+        if not isinstance(prior, PressureRatioPrior):
+            raise ValueError("Wrong prior type")
+        self._pressure_ratio = prior
+
+    @property
+    def eta(self):
+        return self._eta
+
+    @eta.setter
+    def eta(self, prior: EtaPrior):
+        if not isinstance(prior, EtaPrior):
+            raise ValueError("Wrong prior type")
+        self._eta = prior
 
     @property
     def ang_sys(self):
@@ -835,23 +929,27 @@ class Priors(object):
     def to_dict(self):
         priors_dict = {}
 
-        priors_dict["L"] = self._luminosity
+        priors_dict["L"] = self.luminosity
 
-        priors_dict["diffuse_norm"] = self._diffuse_flux
+        priors_dict["diffuse_norm"] = self.diffuse_flux
 
-        priors_dict["F_atmo"] = self._atmospheric_flux
+        priors_dict["F_atmo"] = self.atmospheric_flux
 
-        priors_dict["src_index"] = self._src_index
+        priors_dict["src_index"] = self.src_index
 
-        priors_dict["beta_index"] = self._beta_index
+        priors_dict["beta_index"] = self.beta_index
 
-        priors_dict["diff_index"] = self._diff_index
+        priors_dict["diff_index"] = self.diff_index
 
-        priors_dict["beta_index"] = self._beta_index
+        priors_dict["beta_index"] = self.beta_index
 
-        priors_dict["E0_src"] = self._E0_src
+        priors_dict["E0_src"] = self.E0_src
 
-        priors_dict["ang_sys"] = self._ang_sys
+        priors_dict["eta"] = self.eta
+
+        priors_dict["pressure_ratio"] = self.pressure_ratio
+
+        priors_dict["ang_sys"] = self.ang_sys
 
         return priors_dict
 
@@ -975,6 +1073,21 @@ class Priors(object):
         try:
             # Backwards compatiblity
             priors.beta_index = priors_dict["beta_index"]
+        except KeyError:
+            pass
+
+        try:
+            priors.eta = priors_dict["eta"]
+        except KeyError:
+            pass
+
+        try:
+            priors.pressure_ratio = priors_dict["pressure_ratio"]
+        except KeyError:
+            pass
+
+        try:
+            priors.ang_sys = priors_dict["ang_sys"]
         except KeyError:
             pass
 

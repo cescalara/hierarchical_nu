@@ -124,27 +124,44 @@ class ModelCheck:
                 self.truths["F_atmo"] = atmo_bg.flux_model.total_flux_int.to_value(
                     flux_unit
                 )
-            try:
-                self.truths["L"] = [
-                    Parameter.get_parameter("luminosity").value.to_value(u.GeV / u.s)
-                ]
-            except ValueError:
-                self.truths["L"] = [
-                    Parameter.get_parameter(f"ps_{_}_luminosity")
-                    .to_value(u.GeV / u.s)
-                    .value
-                    for _ in range(len(self._sources.point_source))
-                ]
+
+            if config.parameter_config.source_type == "SeyfertII":
+                try:
+                    self.truths["pressure_ratio"] = [
+                        Parameter.get_parameter("pressure_ratio").value
+                    ]
+                except ValueError:
+                    self.truths["pressure_ratio"] = [
+                        Parameter.get_parameter(f"ps_{_}_pressure_ratio").value
+                        for _ in range(len(self._sources.point_source))
+                    ]
+            else:
+                try:
+                    self.truths["L"] = [
+                        Parameter.get_parameter("luminosity").value.to_value(
+                            u.GeV / u.s
+                        )
+                    ]
+                except ValueError:
+                    self.truths["L"] = [
+                        Parameter.get_parameter(f"ps_{_}_luminosity").value.to_value(
+                            u.GeV / u.s
+                        )
+                        for _ in range(len(self._sources.point_source))
+                    ]
             if not self._sources.background:
                 self.truths["f_arr"] = f_arr
                 self.truths["f_arr_astro"] = f_arr_astro
             try:
                 self.truths["src_index"] = [Parameter.get_parameter("src_index").value]
             except ValueError:
-                self.truths["src_index"] = [
-                    Parameter.get_parameter(f"ps_{_}_src_index").value
-                    for _ in range(len(self._sources.point_source))
-                ]
+                try:
+                    self.truths["src_index"] = [
+                        Parameter.get_parameter(f"ps_{_}_src_index").value
+                        for _ in range(len(self._sources.point_source))
+                    ]
+                except ValueError:
+                    pass
             try:
                 self.truths["beta_index"] = [
                     Parameter.get_parameter("beta_index").value
@@ -165,6 +182,16 @@ class ModelCheck:
                 try:
                     self.truths["beta_index"] = [
                         Parameter.get_parameter(f"ps_{_}_E0_src").value.to_value(u.GeV)
+                        for _ in range(len(self._sources.point_source))
+                    ]
+                except ValueError:
+                    pass
+            try:
+                self.truths["eta"] = [Parameter.get_parameter("eta").value]
+            except:
+                try:
+                    self.truths["eta"] = [
+                        Parameter.get_parameter(f"ps_{_}_eta")
                         for _ in range(len(self._sources.point_source))
                     ]
                 except ValueError:
@@ -353,7 +380,12 @@ class ModelCheck:
             filename_list = [filename_list]
         with h5py.File(filename_list[0], "r") as f:
             job_folder = f["results_0"]
-            _result_names = [key for key in job_folder]
+            _result_names = []
+            for key in job_folder:
+                if "association_prob" in key:
+                    _result_names.append("association_prob")
+                else:
+                    _result_names.append(key)
 
         truths = {}
         priors = None
@@ -406,10 +438,14 @@ class ModelCheck:
                 i = 0
                 while True:
                     try:
-                        # for i in range(n_jobs):
                         job_folder = f["results_%i" % i]
                         for res_key in job_folder:
-                            results[res_key].extend(job_folder[res_key][()])
+                            if "association_prob" in res_key:
+                                results["association_prob"].append(
+                                    np.vstack(job_folder[res_key][()])
+                                )
+                            else:
+                                results[res_key].extend(job_folder[res_key][()])
                         # sim["sim_%i_Lambda" % i] = sim_folder["sim_%i" % i][()]
                         sim_N.extend(sim_folder["sim_%i" % i][()])
                         i += 1
@@ -784,12 +820,12 @@ class ModelCheck:
             if not share_src_index:
                 src_init = [2.3] * len(self._sources.point_source)
                 beta_init = [0.05] * len(self._sources.point_source)
-                E0_init = [1e6] * len(self._sources.point_source)
+                E0_init = [1e5] * len(self._sources.point_source)
                 eta_init = [40] * len(self._sources.point_source)
             else:
                 src_init = 2.3
                 beta_init = 0.05
-                E0_init = 1e6
+                E0_init = 1e5
                 eta_init = 40
             try:
                 F_atmo_range = Parameter.get_parameter("F_atmo").par_range
