@@ -1780,7 +1780,12 @@ class StanFit(SourceInfo):
             # lazy fix for backwards compatibility
             priors = Priors()
 
-        events = Events.from_file(filename, apply_cuts=False)
+        events = Events.from_file(
+            filename,
+            apply_Emin_det=False,
+            apply_spatial_cuts=False,
+            apply_temporal_cuts=False,
+        )
 
         try:
             Emin_det = fit_inputs["Emin_det"]

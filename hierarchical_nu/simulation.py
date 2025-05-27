@@ -1217,8 +1217,18 @@ class SimInfo:
         bg = cls.from_file(background)
         ps = cls.from_file(point_source)
 
-        bg_events = Events.from_file(background)
-        ps_events = Events.from_file(point_source)
+        bg_events = Events.from_file(
+            background,
+            apply_Emin_det=False,
+            apply_spatial_cuts=False,
+            apply_temporal_cuts=False,
+        )
+        ps_events = Events.from_file(
+            point_source,
+            apply_Emin_det=False,
+            apply_spatial_cuts=False,
+            apply_temporal_cuts=False,
+        )
 
         energies = np.hstack((ps_events.energies, bg_events.energies))
         coords = cat((ps_events.coords, bg_events.coords))
