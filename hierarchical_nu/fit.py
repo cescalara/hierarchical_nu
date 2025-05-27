@@ -2264,7 +2264,7 @@ class StanFit(SourceInfo):
                     roi._MJD_min = dm_mjd_min
                     roi._MJD_max = dm_mjd_max
 
-                    N += Events.from_ev_file(dm, apply_roi=False).N
+                    N += Events.from_ev_file(dm, apply_Emin_det=True, apply_spatial_cuts=False, apply_temporal_cuts=False).N
 
                     roi._MJD_min = mjd_min
                     roi._MJD_max = mjd_max
