@@ -1086,7 +1086,7 @@ class StanFit(SourceInfo):
                 if self._fit_eta:
                     eta_vals = eta[:, c_ps].flatten()
 
-            if not self._fit_index and not self._pgamma:
+            if not self._fit_index and not self._pgamma and not self._seyfert:
                 index_vals = alpha[c_ps]
                 ps.flux_model.spectral_shape.set_parameter("index", index_vals)
 
