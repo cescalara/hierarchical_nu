@@ -1041,6 +1041,10 @@ class StanFit(SourceInfo):
             E0 = self["E0_src"]
         elif self._logparabola:
             E0 = inputs["E0_src"]
+        if self._fit_eta:
+            eta = self["eta"]
+        elif self._seyfert:
+            eta = inputs["eta"]
         F = self["F"]
 
         F = F.reshape((iterations * chains, F.size // (iterations * chains)))
@@ -1050,6 +1054,8 @@ class StanFit(SourceInfo):
             N = beta.size // (iterations * chains)
         elif self._fit_Enorm:
             N = E0.size // (iterations * chains)
+        elif self._fit_eta:
+            N = eta.size // (iterations * chains)
 
         share_index = N == 1
         N_samples = iterations * chains
@@ -1067,6 +1073,8 @@ class StanFit(SourceInfo):
                     beta_vals = beta.flatten()
                 if self._fit_Enorm:
                     E0_vals = E0.flatten()
+                if self._fit_eta:
+                    eta_vals = eta.flatten()
 
             else:
                 if self._fit_index:
@@ -1075,6 +1083,8 @@ class StanFit(SourceInfo):
                     beta_vals = beta[:, c_ps].flatten()
                 if self._fit_Enorm:
                     E0_vals = E0[:, c_ps].flatten()
+                if self._fit_eta:
+                    eta_vals = eta[:, c_ps].flatten()
 
             if not self._fit_index and not self._pgamma:
                 index_vals = alpha[c_ps]
@@ -1089,6 +1099,9 @@ class StanFit(SourceInfo):
                 ps.flux_model.spectral_shape.set_parameter(
                     "norm_energy", E0_vals * u.GeV
                 )
+            if not self._fit_eta and self._seyfert:
+                eta_vals = eta[c_ps]
+                ps.flux_model.spectral_shape.set_parameter("eta", eta_vals)
 
             flux_int = F[:, c_ps].flatten() << 1 / u.m**2 / u.s
 
@@ -1105,6 +1118,8 @@ class StanFit(SourceInfo):
                     ps.flux_model.spectral_shape.set_parameter(
                         "norm_energy", E0_vals[c] * u.GeV
                     )
+                if self._fit_eta:
+                    ps.flux_model.spectral_shape.set_parameter("eta", eta_vals[c])
 
                 flux = ps.flux_model.spectral_shape(E)  # 1 / GeV / s / m2
 
@@ -2264,7 +2279,12 @@ class StanFit(SourceInfo):
                     roi._MJD_min = dm_mjd_min
                     roi._MJD_max = dm_mjd_max
 
-                    N += Events.from_ev_file(dm, apply_Emin_det=True, apply_spatial_cuts=False, apply_temporal_cuts=False).N
+                    N += Events.from_ev_file(
+                        dm,
+                        apply_Emin_det=True,
+                        apply_spatial_cuts=False,
+                        apply_temporal_cuts=False,
+                    ).N
 
                     roi._MJD_min = mjd_min
                     roi._MJD_max = mjd_max
