@@ -5,6 +5,8 @@ import h5py
 import arviz as av
 import time
 from matplotlib import pyplot as plt
+from matplotlib import colors as mc
+import colorsys
 import matplotlib.patches as mpl_patches
 from joblib import Parallel, delayed
 from astropy import units as u
@@ -472,6 +474,9 @@ class ModelCheck:
         mask_results: Union[None, np.ndarray] = None,
         alpha=0.1,
         show_N: bool = False,
+        band_quantiles: List[float] = [],
+        band_color: str = "C0",
+        mean_color: str = "C1",
     ):
         """
         Compare posteriors of parameters with simulation inputs
@@ -482,12 +487,22 @@ class ModelCheck:
         :param mask_results: numpy array mask to mask out single samples
         :param alpha: alpha of histograms
         :param show_N: overplot true number of events per source component
+        :param band_quantiles: if provided, plot bands containing the provided quantile of all fits
         """
         if not var_names:
             var_names = self._default_var_names
 
         if not var_labels:
             var_labels = self._default_var_names
+
+        if len(band_quantiles) > 0:
+            use_quantiles = True
+            band_quantiles = np.atleast_1d(band_quantiles)
+            quantiles = np.sort(
+                np.hstack((0.5 + band_quantiles / 2, 0.5 - band_quantiles / 2))
+            )
+        else:
+            use_quantiles = False
 
         mask = np.tile(False, len(self.results[var_names[0]]))
         if mask_results is not None:
@@ -497,6 +512,8 @@ class ModelCheck:
 
         N = len(var_names)
         fig, ax = plt.subplots(N, figsize=(5, N * 3))
+        if N == 1:
+            ax = [ax]
 
         for v, var_name in enumerate(var_names):
             # Check if var_name exists
@@ -538,55 +555,100 @@ class ModelCheck:
                     np.max(np.array(self.results[var_name])[~mask]),
                     nbins,
                 )
-            max_value = 0
 
-            for i in range(len(self.results[var_name])):
-                if i not in mask_results and len(self.results[var_name]) != 0:
-                    if log:
-                        n, _ = np.histogram(
-                            np.log10(self.results[var_name][i]),
-                            np.log10(bins),
-                            density=True,
+            band_handles = []
+            band_labels = []
+
+            if use_quantiles:
+                hists = []
+                results = self.results[var_name]
+                for r in results:
+                    hists.append(np.histogram(r, bins=bins)[0])
+
+                hists = np.array(hists)
+
+                mean = []
+                band = []
+                for b in hists.T:
+                    mean.append(np.quantile(b, 0.5))
+                    band.append(np.quantile(b, quantiles))
+                mean = np.array(mean)
+                band = np.array(band).T
+
+
+                alpha = np.linspace(0.1, 1.0, len(quantiles) * 2)
+
+                # TODO change alpha value to this from hnu_paper repo / https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib
+                # l = [1, 0.7, 0.4]
+                saturation = np.sort(band_quantiles)
+
+                color = colorsys.rgb_to_hls(*mc.to_rgb(band_color))
+                    
+                # hnu_colors = []
+                # for i in l:
+                #    color = colorsys.rgb_to_hls(*mc.to_rgb("C0"))
+                #    color = colorsys.hls_to_rgb(color[0], 1 - i * (1 - color[1]), color[2])
+                #    hnu_colors.append(color)
+                for low, high, s, q in zip(
+                    band[: len(quantiles) + 1], band[len(quantiles) :: -1], saturation, saturation[::-1]
+                ):
+                    
+                    c = colorsys.hls_to_rgb(color[0], 1 - s * (1 - color[1]), color[2])
+                    band_handles.append(
+                        ax[v].stairs(
+                            high,
+                            bins,
+                            baseline=low,
+                            facecolor=c,
+                            # alpha=0.2,
+                            fill=True,
+                            edgecolor="none",
                         )
-                    else:
-                        n, _ = np.histogram(
-                            self.results[var_name][i], bins, density=True
+                    )
+                    band_labels.append(f"{q*100:.0f}\% central quantile")
+                band_handles.append(ax[v].stairs(mean, bins, color=mean_color))
+                band_labels.append("median")
+
+
+            else:
+
+                for i in range(len(self.results[var_name])):
+                    if i not in mask_results and len(self.results[var_name]) != 0:
+                        if log:
+                            n, _ = np.histogram(
+                                np.log10(self.results[var_name][i]),
+                                np.log10(bins),
+                                density=True,
+                            )
+                        else:
+                            n, _ = np.histogram(
+                                self.results[var_name][i], bins, density=True
+                            )
+                        ax[v].stairs(
+                            n,
+                            bins,
+                            color="#017B76",
+                            alpha=alpha,
+                            lw=1.0,
                         )
-                    n = np.hstack((np.array([0]), n, np.array([n[-1], 0])))
-                    plot_bins = np.hstack(
-                        (np.array([bins[0] - 1e-10]), bins, np.array([bins[-1]]))
-                    )
 
-                    low = np.nonzero(n)[0].min()
-                    high = np.nonzero(n)[0].max()
-                    ax[v].step(
-                        plot_bins[low - 1 : high + 2],
-                        n[low - 1 : high + 2],
-                        color="#017B76",
-                        alpha=alpha,
-                        lw=1.0,
-                        where="post",
-                    )
+            if show_N and var_name == "Nex_src":
+                for val in self.sim_N:
+                    # Overplot the actual number of events for each component
+                    # for line in val:
+                    ax[v].axvline(val[0], ls="-", c="red", lw=0.3)
 
-                    if show_N and var_name == "Nex_src":
-                        for val in self.sim_N:
-                            # Overplot the actual number of events for each component
-                            # for line in val:
-                            ax[v].axvline(val[0], ls="-", c="red", lw=0.3)
+            elif show_N and var_name == "Nex_diff":
+                for val in self.sim_N:
+                    # Overplot the actual number of events for each component
+                    # for line in val:
+                    ax[v].axvline(val[1], ls="-", c="red", lw=0.3)
 
-                    elif show_N and var_name == "Nex_diff":
-                        for val in self.sim_N:
-                            # Overplot the actual number of events for each component
-                            # for line in val:
-                            ax[v].axvline(val[1], ls="-", c="red", lw=0.3)
-
-                    elif show_N and var_name == "Nex_atmo":
-                        for val in self.sim_N:
-                            # Overplot the actual number of events for each component
-                            # for line in val:
-                            ax[v].axvline(val[2], ls="-", c="red", lw=0.3)
-
-                    max_value = n.max() if n.max() > max_value else max_value
+            elif show_N and var_name == "Nex_atmo":
+                for val in self.sim_N:
+                    # Overplot the actual number of events for each component
+                    # for line in val:
+                    ax[v].axvline(val[2], ls="-", c="red", lw=0.3)
 
             if show_prior:
                 N = len(self.results[var_name][0]) * 100
@@ -632,35 +694,46 @@ class ModelCheck:
                     )
 
             if var_name in self.truths.keys():
+                # TODO fix plotting for scalar and vector variables
                 ax[v].axvline(
                     self.truths[var_name], color="k", linestyle="-", label="Truth"
                 )
                 counts_hdi = 0
                 counts_50_quantile = 0
+                iterations = self.config.stan_config.iterations
+                chains = self.config.stan_config.chains
                 for d in self.results[var_name]:
-                    hdi = av.hdi(d, 0.5)
-                    quantile = np.quantile(d, [0.25, 0.75])
-                    true_val = self.truths[var_name]
+                    hdi = av.hdi(d.flatten(), 0.5)
+                    quantile = np.quantile(d.flatten(), [0.25, 0.75])
+                    try:
+                        true_val = float(self.truths[var_name])
+                    except:
+                        continue
                     if true_val <= hdi[1] and true_val >= hdi[0]:
                         counts_hdi += 1
                     if true_val <= quantile[1] and true_val >= hdi[0]:
                         counts_50_quantile += 1
                 length = len(self.results[var_name]) - mask_results.size
                 text = [
-                    f"fraction in 50\% HDI: {counts_hdi / length:.2f}\n"
-                    + f"fraction in 50\% central interval: {counts_50_quantile / length:.2f}"
+                    f"fraction in \n50\% HDI: {counts_hdi / length:.2f}\n"
+                    + f"fraction in \n50\% central interval: {counts_50_quantile / length:.2f}"
                 ]
                 handles = [
                     mpl_patches.Rectangle(
                         (0, 0), 1, 1, fc="white", ec="white", lw=0, alpha=0
                     )
                 ]
+                if band_handles:
+                    handles += band_handles
+                    text += band_labels
                 ax[v].legend(
                     handles=handles,
                     labels=text,
                     loc="best",
-                    handlelength=0,
-                    handletextpad=0,
+                    # handlelength=0,
+                    # handletextpad=0,
+                    edgecolor="none",
+                    framealpha=0.4
                 )
 
             ax[v].set_xlabel(var_labels[v], labelpad=10)
