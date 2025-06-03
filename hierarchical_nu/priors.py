@@ -287,6 +287,7 @@ class ExponentialGaussianPrior(PriorDistribution):
         priors_dict["sigma"] = self.sigma
         priors_dict["lam"] = self.lam
         priors_dict["units"] = units
+        priors_dict["name"] = self.name
         return priors_dict
 
 
@@ -310,6 +311,7 @@ class PriorDictHandler:
             "eta": EtaPrior,
             "pressure_ratio": PressureRatioPrior,
         }
+        print(prior_dict)
         prior_name = prior_dict["name"]
         prior = translate[prior_dict["quantity"]]
         units = u.Unit(prior_dict["units"])
@@ -331,6 +333,9 @@ class PriorDictHandler:
             return prior(NormalPrior, mu=mu[0], sigma=sigma[0])
         elif prior_name == "lognormal":
             return prior(LogNormalPrior, mu=np.exp(mu[0]) * units, sigma=sigma[0])
+        elif prior_name == "exponnorm":
+            lam = prior_dict["lam"]
+            return prior(ExponentialGaussianPrior, mu=mu[0] * units, sigma=sigma[0] * units, lam=lam / units)
 
 
 class UnitPrior:
@@ -537,7 +542,7 @@ class UnitlessPrior:
 
 
 class AngularPrior(UnitPrior):
-    UNITS = u.rad
+    UNITS = u.deg
     UNITS_STRING = UNITS.to_string()
 
     @u.quantity_input
@@ -1021,7 +1026,7 @@ class Priors(object):
         def make_dict_entry(d, arg):
             for k, v in arg.items():
                 if k == "name":
-                    # name should be replaces by LuminosityPrior etc.
+                    # name should be replaced by LuminosityPrior etc.
                     d[k] = v[()].decode("ascii")
 
                 else:
@@ -1052,10 +1057,9 @@ class Priors(object):
                     priors_dict[key] = MultiSourceEnergyPrior(container)
                 elif key == "L":
                     priors_dict[key] = MultiSourceLuminosityPrior(container)
-
                 elif key == "ang_sys":
-                    raise NotImplementedError()
-
+                    # should not happen
+                    raise ValueError("There is only one systematic angular uncertainty")
         return cls.from_dict(priors_dict)
 
     @classmethod
@@ -1070,6 +1074,8 @@ class Priors(object):
 
         priors.src_index = priors_dict["src_index"]
 
+        priors.diff_index = priors_dict["diff_index"]
+        
         try:
             # Backwards compatiblity
             priors.beta_index = priors_dict["beta_index"]
@@ -1095,12 +1101,5 @@ class Priors(object):
             priors.E0_src = priors_dict["E0_src"]
         except KeyError:
             pass
-
-        try:
-            priors.ang_sys = priors_dict["ang_sys"]
-        except KeyError:
-            pass
-
-        priors.diff_index = priors_dict["diff_index"]
 
         return priors

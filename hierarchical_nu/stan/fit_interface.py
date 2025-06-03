@@ -707,11 +707,6 @@ class StanFitInterface(StanInterface):
                         self._log_N_bg = ForwardVariableDef("log_N_bg", "real")
                         self._log_N_bg << glob[start]
                         start << start + 1
-                    if self._fit_ang_sys:
-                        self._ang_sys_add_squared = ForwardVariableDef(
-                            "ang_sys_add_squared", "real"
-                        )
-                        self._ang_sys_add_squared << glob[start]
 
                     # Local pars are only neutrino energies
                     self._E = ForwardVariableDef("E", "vector[N]")

@@ -44,7 +44,7 @@ from hierarchical_nu.detector.r2021 import (
 )
 from hierarchical_nu.precomputation import ExposureIntegral
 from hierarchical_nu.events import Events
-from hierarchical_nu.priors import Priors, UnitPrior, MultiSourcePrior, NoPriorSetError
+from hierarchical_nu.priors import Priors, UnitPrior, MultiSourcePrior, NoPriorSetError, AngularPrior
 from hierarchical_nu.source.source import uv_to_icrs
 
 from hierarchical_nu.stan.interface import STAN_PATH, STAN_GEN_PATH
@@ -454,14 +454,21 @@ class StanFit(SourceInfo):
 
         def draw_prior(prior, ax, x):
             pdf = prior.pdf
-            ax.plot(x, pdf(x * prior.UNITS), color="black", alpha=0.4, zorder=0)
+            if isinstance(prior, AngularPrior):
+                plot = (pdf(x * u.deg) / u.rad).to_value(1 / u.deg)
+            else:
+                plot = pdf(x * prior.UNITS)
+            ax.plot(x, plot, color="black", alpha=0.4, zorder=0)
 
         for ax_double in axs:
             name = ax_double[0].get_title()
             # check if there is a prior available for the variable
             try:
                 # If so, get it and plot it
-                prior = priors_dict[name]
+                if "ang_sys" in name:
+                    prior = priors_dict["ang_sys"]
+                else:
+                    prior = priors_dict[name]
                 ax = ax_double[0]
                 supp = ax.get_xlim()
                 x = np.linspace(*supp, 1000)
@@ -482,10 +489,13 @@ class StanFit(SourceInfo):
                         draw_prior(prior, ax, x)
 
                 if isinstance(prior, UnitPrior):
-                    try:
-                        unit = prior.UNITS.unit
-                    except AttributeError:
-                        unit = prior.UNITS
+                    if name == "ang_sys_deg":
+                        unit = u.deg
+                    else:
+                        try:
+                            unit = prior.UNITS.unit
+                        except AttributeError:
+                            unit = prior.UNITS
                     if transform:
                         # yikes
                         title = f"[$\\log_{{10}}\\left (\\frac{{\mathrm{{{name}}}}}{{{unit.to_string('latex_inline').strip('$')}}}\\right )$]"
@@ -1789,11 +1799,11 @@ class StanFit(SourceInfo):
 
         obs_time_dict = {et: obs_time[k] for k, et in enumerate(event_types)}
 
-        try:
-            priors = Priors.from_group(filename, "priors")
-        except KeyError:
-            # lazy fix for backwards compatibility
-            priors = Priors()
+        # try:
+        priors = Priors.from_group(filename, "priors")
+        #except KeyError:
+        #    # lazy fix for backwards compatibility
+        #    priors = Priors()
 
         events = Events.from_file(
             filename,
