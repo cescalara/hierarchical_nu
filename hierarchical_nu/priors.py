@@ -311,7 +311,6 @@ class PriorDictHandler:
             "eta": EtaPrior,
             "pressure_ratio": PressureRatioPrior,
         }
-        print(prior_dict)
         prior_name = prior_dict["name"]
         prior = translate[prior_dict["quantity"]]
         units = u.Unit(prior_dict["units"])

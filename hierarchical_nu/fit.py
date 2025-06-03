@@ -454,10 +454,7 @@ class StanFit(SourceInfo):
 
         def draw_prior(prior, ax, x):
             pdf = prior.pdf
-            if isinstance(prior, AngularPrior):
-                plot = (pdf(x * u.deg) / u.rad).to_value(1 / u.deg)
-            else:
-                plot = pdf(x * prior.UNITS)
+            plot = pdf(x * prior.UNITS)
             ax.plot(x, plot, color="black", alpha=0.4, zorder=0)
 
         for ax_double in axs:
@@ -489,13 +486,10 @@ class StanFit(SourceInfo):
                         draw_prior(prior, ax, x)
 
                 if isinstance(prior, UnitPrior):
-                    if name == "ang_sys_deg":
-                        unit = u.deg
-                    else:
-                        try:
-                            unit = prior.UNITS.unit
-                        except AttributeError:
-                            unit = prior.UNITS
+                    try:
+                        unit = prior.UNITS.unit
+                    except AttributeError:
+                        unit = prior.UNITS
                     if transform:
                         # yikes
                         title = f"[$\\log_{{10}}\\left (\\frac{{\mathrm{{{name}}}}}{{{unit.to_string('latex_inline').strip('$')}}}\\right )$]"
@@ -1716,6 +1710,9 @@ class StanFit(SourceInfo):
 
         if "atmo_integ_val" in fit_inputs.keys():
             fit._def_var_names.append("F_atmo")
+
+        if "ang_sys_deg" in outputs.keys():
+            fit._def_var_names.append("ang_sys_deg")
 
         return fit
 
