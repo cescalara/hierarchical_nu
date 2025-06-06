@@ -282,7 +282,7 @@ class ConfigParser:
                 )
             )
         else:
-            for c, pressure in parameter_config.P:
+            for c, pressure in enumerate(parameter_config.P):
                 name = f"ps_{c}_pressure_ratio"
                 P.append(
                     Parameter(
