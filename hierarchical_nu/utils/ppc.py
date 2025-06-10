@@ -302,21 +302,41 @@ class PPC:
                     diff_norm.fixed = True
 
                 if point_sources:
-                    try:
-                        lumi = Parameter.get_parameter("luminosity")
+                    if "eta" in fit.keys() or "ps_0_eta" in fit.keys():
+                        # use pressure ratio instead of luminosity
+                        try:
+                            P = Parameter.get_parameter("pressure_ratio")
 
-                        lumi.fixed = False
-                        lumi.value = fit["L"].flatten()[rint] * u.GeV / u.s
-                        lumi.fixed = True
-                    except:
-                        for c, ps in enumerate(point_sources):
-                            name = f"ps_{c}_luminosity"
-                            lumi = Parameter.get_parameter(name)
+                            P.fixed = False
+                            P.value = fit["pressure_ratio"].flatten()[rint]
+                            P.fixed = True
+                        except:
+                            for c, ps in enumerate(point_sources):
+                                name = f"ps_{c}_pressure_ratio"
+                                P = Parameter.get_parameter(name)
+                                P.fixed = False
+                                P.value = f["pressure_ratio_ind"][..., c].flatten()[
+                                    rint
+                                ]
+                                P.fixed = True
+                    else:
+                        try:
+                            lumi = Parameter.get_parameter("luminosity")
+
                             lumi.fixed = False
-                            lumi.value = fit["L"][..., c].flatten()[rint] * u.GeV / u.s
+                            lumi.value = fit["L"].flatten()[rint] * u.GeV / u.s
                             lumi.fixed = True
+                        except:
+                            for c, ps in enumerate(point_sources):
+                                name = f"ps_{c}_luminosity"
+                                lumi = Parameter.get_parameter(name)
+                                lumi.fixed = False
+                                lumi.value = (
+                                    fit["L"][..., c].flatten()[rint] * u.GeV / u.s
+                                )
+                                lumi.fixed = True
 
-                    for param_name in ["src_index", "beta_index", "E0_src"]:
+                    for param_name in ["src_index", "beta_index", "E0_src", "eta"]:
                         if param_name in config.parameter_config.fit_params:
                             if not config.parameter_config.share_src_index:
                                 name = f"ps_{c}_{param_name}"
