@@ -308,6 +308,7 @@ class PPC:
                             P = Parameter.get_parameter("pressure_ratio")
 
                             P.fixed = False
+                            P.par_range = (0., max(fit["pressure_ratio"].flatten()))
                             P.value = fit["pressure_ratio"].flatten()[rint]
                             P.fixed = True
                         except:
@@ -315,6 +316,7 @@ class PPC:
                                 name = f"ps_{c}_pressure_ratio"
                                 P = Parameter.get_parameter(name)
                                 P.fixed = False
+                                P.par_range = (0., max(fit["pressure_ratio"].flatten()))
                                 P.value = f["pressure_ratio_ind"][..., c].flatten()[
                                     rint
                                 ]
