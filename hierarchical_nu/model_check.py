@@ -575,7 +575,6 @@ class ModelCheck:
                 mean = np.array(mean)
                 band = np.array(band).T
 
-
                 alpha = np.linspace(0.1, 1.0, len(quantiles) * 2)
 
                 # TODO change alpha value to this from hnu_paper repo / https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib
@@ -583,16 +582,19 @@ class ModelCheck:
                 saturation = np.sort(band_quantiles)
 
                 color = colorsys.rgb_to_hls(*mc.to_rgb(band_color))
-                    
+
                 # hnu_colors = []
                 # for i in l:
                 #    color = colorsys.rgb_to_hls(*mc.to_rgb("C0"))
                 #    color = colorsys.hls_to_rgb(color[0], 1 - i * (1 - color[1]), color[2])
                 #    hnu_colors.append(color)
                 for low, high, s, q in zip(
-                    band[: len(quantiles) + 1], band[len(quantiles) :: -1], saturation, saturation[::-1]
+                    band[: len(quantiles) + 1],
+                    band[len(quantiles) :: -1],
+                    saturation,
+                    saturation[::-1],
                 ):
-                    
+
                     c = colorsys.hls_to_rgb(color[0], 1 - s * (1 - color[1]), color[2])
                     band_handles.append(
                         ax[v].stairs(
@@ -608,7 +610,6 @@ class ModelCheck:
                     band_labels.append(f"{q*100:.0f}\% central quantile")
                 band_handles.append(ax[v].stairs(mean, bins, color=mean_color))
                 band_labels.append("median")
-
 
             else:
 
@@ -715,8 +716,8 @@ class ModelCheck:
                         counts_50_quantile += 1
                 length = len(self.results[var_name]) - mask_results.size
                 text = [
-                    f"fraction in \n50\% HDI: {counts_hdi / length:.2f}\n"
-                    + f"fraction in \n50\% central interval: {counts_50_quantile / length:.2f}"
+                    f"fraction in\n50\% HDI: {counts_hdi / length:.2f}\n"
+                    + f"50\% central interval: {counts_50_quantile / length:.2f}"
                 ]
                 handles = [
                     mpl_patches.Rectangle(
@@ -732,8 +733,8 @@ class ModelCheck:
                     loc="best",
                     # handlelength=0,
                     # handletextpad=0,
-                    edgecolor="none",
-                    framealpha=0.4
+                    # edgecolor="none",
+                    framealpha=0.8,
                 )
 
             ax[v].set_xlabel(var_labels[v], labelpad=10)

@@ -39,7 +39,7 @@ class ParameterConfig:
     beta_index: List[float] = field(default_factory=lambda: [0.0])
     beta_index_range: Tuple = (-1.0, 1.0)
     eta: List[float] = field(
-        default_factory=lambda: [40]
+        default_factory=lambda: [40.0]
     )  # inverse turbulence strength
     eta_range: Tuple = (2.0, 150.0)
     P: List[float] = field(
