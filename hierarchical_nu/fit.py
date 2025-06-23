@@ -327,6 +327,12 @@ class StanFit(SourceInfo):
             **kwargs,
         )
 
+    def keys(self):
+        if self._reload:
+            return self._fit_output.keys()
+        else:
+            return self._fit_output.stan_variables()
+
     def __getitem__(self, key):
         """
         Return samples from chains

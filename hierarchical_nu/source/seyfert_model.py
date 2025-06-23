@@ -113,7 +113,7 @@ class SeyfertNuMuSpectrum(SpectralShape):
             self._eta,
             np.log10(self._flux_grid.to_value(1 / u.GeV / u.s / u.m**2)).T,
             kx=1,
-            ky=3,
+            ky=1,
         )
 
         # properly normalise everything: stan needs pdf in energy on a grid of eta
