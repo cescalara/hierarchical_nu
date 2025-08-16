@@ -1154,7 +1154,9 @@ class StanFitInterface(StanInterface):
 
             if self._sources.point_source:
                 # Define variables for the prior mu/sigma
-                if (
+                if self._priors.src_index.name == "notaprior":
+                    pass
+                elif (
                     isinstance(self._priors.src_index, MultiSourcePrior)
                     and self._fit_index
                 ):
@@ -1198,7 +1200,10 @@ class StanFitInterface(StanInterface):
                     eta_sigma_def = ForwardVariableDef("eta_sigma", "real")
 
                 # Store prior data definitions
-                if self._fit_index:
+                if self._fit_index and self._priors.src_index.name in [
+                    "normal",
+                    "lognormal",
+                ]:
                     self._stan_prior_src_index_mu = index_mu_def
                     self._stan_prior_src_index_sigma = index_sigma_def
                 if self._fit_beta:
