@@ -47,10 +47,17 @@ class PPC:
         while True:
             try:
                 self._events.append(
-                    Events.from_file(path, group_name=f"events_{i}", apply_cuts=False)
+                    Events.from_file(
+                        path,
+                        group_name=f"events_{i}",
+                        apply_Emin_det=False,
+                        apply_spatial_cuts=False,
+                        apply_temporal_cuts=False,
+                    )
                 )
                 i += 1
-            except:
+            except Exception as e:
+                print(e)
                 break
 
     def _plot_radial_ppc(self, bins):
@@ -65,8 +72,10 @@ class PPC:
         self,
         bins_Ereco=np.geomspace(1e2, 1e7, 8 * 5),
         bins_ang_sep_sq=np.arange(0, 25.1, 1 / 3),
-        quantiles=[30, 60, 90],
+        quantiles=[90, 68, 50],
         figsize=(6, 3),
+        colors=None,
+        alpha=0.2,
     ):
         """
         Plot diagnostic PPCs
@@ -74,8 +83,15 @@ class PPC:
         :param bins_ang_seq_eq: binning of angular distance to source in units of degrees squared
         :param quantiles: list of quantiles between 0 and 100 to plot colour bands of
         :param figsize: (width, height) of figure
+        :param colors: Provide some colour for plotting the bands
         """
 
+        if colors is None:
+            colors = viridis(0, 0)
+        colors = np.atleast_1d(colors)
+        if len(colors) != len(quantiles):
+            colors = np.vstack([colors] * len(quantiles))
+        print(colors)
         quantiles = np.atleast_1d(quantiles)
         q_low = (50 - quantiles / 2) / 100
         q_high = (50 + quantiles / 2) / 100
@@ -115,10 +131,11 @@ class PPC:
         obs = np.histogram(ang_sep**2, bins=bins_ang_sep_sq)[0]
 
         for (
+            col,
             q,
             l,
             h,
-        ) in zip(quantiles, ql, qh):
+        ) in zip(colors, quantiles, ql, qh):
             for c, (bl, bh) in enumerate(
                 zip(bins_ang_sep_sq[:-1], bins_ang_sep_sq[1:])
             ):
@@ -126,8 +143,8 @@ class PPC:
                     [bl, bh],
                     l[c],
                     h[c],
-                    color=viridis(0.0),
-                    alpha=0.2,
+                    color=col,
+                    alpha=alpha,
                     edgecolor="none",
                 )
 
@@ -156,15 +173,15 @@ class PPC:
 
             return np.power(x, 2)
 
-        secax = ax.secondary_xaxis("top", functions=(transform, inverse))
-        secax.set_xlabel("linear distance~[deg]")
-        secax.set_xticks(np.arange(5.1))
-
         ax.legend()
         ax.set_xticks(np.arange(0, 25.1, 5))
         ax.set_xlim(0, 25)
         ax.set_xlabel(xlabels[0])
         ax.set_ylabel("counts per bin")
+
+        secax = ax.secondary_xaxis("top", functions=(transform, inverse))
+        secax.set_xlabel("linear distance~[deg]")
+        secax.set_xticks(np.arange(5.1))
 
         # Detected energy posterior predictive check
         ax = axs[1]
@@ -183,17 +200,18 @@ class PPC:
         qh = np.quantile(hists, q_high, axis=0)
 
         for (
+            col,
             q,
             l,
             h,
-        ) in zip(quantiles, ql, qh):
+        ) in zip(colors, quantiles, ql, qh):
             for c, (bl, bh) in enumerate(zip(bins_Ereco[:-1], bins_Ereco[1:])):
                 ax.fill_between(
                     [bl, bh],
                     l[c],
                     h[c],
-                    color=viridis(0.0),
-                    alpha=0.2,
+                    color=col,
+                    alpha=alpha,
                     edgecolor="none",
                 )
 
@@ -205,7 +223,7 @@ class PPC:
         ax.set_ylabel("counts per bin")
         ax.legend()
 
-        return fig, axs
+        return fig, axs, secax
 
     def setup(self, use_data_as_bg: bool = False):
         """
@@ -308,7 +326,7 @@ class PPC:
                             P = Parameter.get_parameter("pressure_ratio")
 
                             P.fixed = False
-                            P.par_range = (0., max(fit["pressure_ratio"].flatten()))
+                            P.par_range = (0.0, max(fit["pressure_ratio"].flatten()))
                             P.value = fit["pressure_ratio"].flatten()[rint]
                             P.fixed = True
                         except:
@@ -316,7 +334,10 @@ class PPC:
                                 name = f"ps_{c}_pressure_ratio"
                                 P = Parameter.get_parameter(name)
                                 P.fixed = False
-                                P.par_range = (0., max(fit["pressure_ratio"].flatten()))
+                                P.par_range = (
+                                    0.0,
+                                    max(fit["pressure_ratio"].flatten()),
+                                )
                                 P.value = fit["pressure_ratio_ind"][..., c].flatten()[
                                     rint
                                 ]
@@ -326,9 +347,15 @@ class PPC:
                             lumi = Parameter.get_parameter("luminosity")
 
                             lumi.fixed = False
-                            lumi.value = fit["L"].flatten()[rint] * u.GeV / u.s
+                            try:
+                                lumi.value = fit["L"].flatten()[rint] * u.GeV / u.s
+                            except KeyError:
+                                lumi.value = (
+                                    fit["L_ind"][..., 0].flatten()[rint] * u.GeV / u.s
+                                )
                             lumi.fixed = True
                         except:
+                            # TODO: add some ParameterNotFound Exception
                             for c, ps in enumerate(point_sources):
                                 name = f"ps_{c}_luminosity"
                                 lumi = Parameter.get_parameter(name)
@@ -394,9 +421,9 @@ class PPC:
                     # How to proceed when only durations but no MJD is provided?
                     # Ignore for now, TODO for later...
                     bg_events = Events.from_ev_file(
-                        # TODO: change in future to also scramble MJD of events
                         *self._parser.detector_model,
                         scramble_ra=True,
+                        scramble_mjd=True,
                         seed=self._config.seed + i,
                     )
                     try:
