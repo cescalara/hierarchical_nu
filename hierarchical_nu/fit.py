@@ -44,7 +44,13 @@ from hierarchical_nu.detector.r2021 import (
 )
 from hierarchical_nu.precomputation import ExposureIntegral
 from hierarchical_nu.events import Events
-from hierarchical_nu.priors import Priors, UnitPrior, MultiSourcePrior, NoPriorSetError, AngularPrior
+from hierarchical_nu.priors import (
+    Priors,
+    UnitPrior,
+    MultiSourcePrior,
+    NoPriorSetError,
+    AngularPrior,
+)
 from hierarchical_nu.source.source import uv_to_icrs
 
 from hierarchical_nu.stan.interface import STAN_PATH, STAN_GEN_PATH
@@ -935,6 +941,7 @@ class StanFit(SourceInfo):
         assoc_idx: int = 0,
         radius: u.Quantity[u.deg] = 5 * u.deg,
         color_scale: str = "lin",
+        layout: str = "horizontal",
         highlight: Union[Iterable, None] = None,
         assoc_threshold: float = 0.2,
         figsize=(8, 3),
@@ -954,27 +961,42 @@ class StanFit(SourceInfo):
         :param radius: Radius of sky plot
         :param assoc_idx: source idx to calculate the association probability
         :param color_scale: display association probability on "lin" or "log" scale
+        :param layout: 'horizontal' or 'vertical'
         :param highlight: Iterable of event indices to highlight in plot.
         :param assoc_threshold: If highlight==None, highlight above this association probability.
         :param figsize: Tuple passed to pyplot.
         """
 
         fig = plt.figure(dpi=150, figsize=figsize)
-        gs = fig.add_gridspec(
-            1,
-            2,
-            width_ratios=(0.8, 1.0),
-            left=0.05,
-            right=0.95,
-            bottom=0.05,
-            top=0.95,
-            wspace=0.13,
-            hspace=0.05,
-        )
-
         axs = []
+        if layout == "horizontal":
+            gs = fig.add_gridspec(
+                1,
+                2,
+                width_ratios=(0.8, 1.0),
+                left=0.05,
+                right=0.95,
+                bottom=0.05,
+                top=0.95,
+                wspace=0.13,
+                hspace=0.05,
+            )
 
-        ax = fig.add_subplot(gs[0, 1])
+            ax = fig.add_subplot(gs[0, 1])
+
+        elif layout == "vertical":
+            gs = fig.add_gridspec(
+                2,
+                1,
+                height_ratios=(1.0, 1.0),
+                left=0.05,
+                right=0.95,
+                bottom=0.05,
+                top=0.95,
+                wspace=0.13,
+                hspace=0.13,
+            )
+            ax = fig.add_subplot(gs[1, 0])
 
         if isinstance(center, int):
             center = self.get_src_position(center)
@@ -999,8 +1021,13 @@ class StanFit(SourceInfo):
         axs.append(ax)
         fig.colorbar(mapper, label="association probability", ax=ax)
 
+        if layout == "horizontal":
+            grid = gs[0, 0]
+        elif layout == "vertical":
+            grid = gs[0, 0]
+
         ax = fig.add_subplot(
-            gs[0, 0],
+            grid,
             projection="astro degrees zoom",
             center=center,
             radius=f"{radius.to_value(u.deg)} deg",
@@ -1814,7 +1841,7 @@ class StanFit(SourceInfo):
 
         # try:
         priors = Priors.from_group(filename, "priors")
-        #except KeyError:
+        # except KeyError:
         #    # lazy fix for backwards compatibility
         #    priors = Priors()
 
@@ -2200,6 +2227,7 @@ class StanFit(SourceInfo):
             fit_inputs["src_index_sigma"] = self._priors.src_index.sigma
         elif not self._priors.src_index.name == "notaprior":
             raise ValueError("No other prior type for source index implemented.")
+
         if self._priors.luminosity.name == "lognormal":
             fit_inputs["lumi_mu"] = self._priors.luminosity.mu
             fit_inputs["lumi_sigma"] = self._priors.luminosity.sigma
@@ -2286,27 +2314,27 @@ class StanFit(SourceInfo):
             fit_inputs["bg_llh"] = np.zeros(self.events.N)
 
             time = LifeTime()
-            time_norm = sum(
-                [
-                    time.lifetime_from_dm(dm)[dm].to_value(u.s)
-                    for dm in self._event_types
-                ]
-            )
+            # time_norm = sum(
+            #     [
+            #         time.lifetime_from_dm(dm)[dm].to_value(u.s)
+            #         for dm in self._event_types
+            #     ]
+            # )
 
             for dm in self._event_types:
 
                 dm_mjd_min, dm_mjd_max = time.mjd_from_dm(dm)
 
                 # get number of events per detector config over the respective detector lifetime in that config
-                N = 0
-                N_dm = np.sum(self.events.types == dm.S)
+                N_dm = 0
+                N_dm_sel = np.sum(self.events.types == dm.S)
                 for roi in ROIList.STACK:
                     mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
 
                     roi._MJD_min = dm_mjd_min
                     roi._MJD_max = dm_mjd_max
 
-                    N += Events.from_ev_file(
+                    N_dm += Events.from_ev_file(
                         dm,
                         apply_Emin_det=True,
                         apply_spatial_cuts=False,
@@ -2316,7 +2344,9 @@ class StanFit(SourceInfo):
                     roi._MJD_min = mjd_min
                     roi._MJD_max = mjd_max
 
-                inverse_norm = N_dm / N
+                # inverse_norm = N_dm_sel / N_dm
+
+                time_norm = time.lifetime_from_dm(dm)[dm].to_value(u.s)
 
                 decs = self.events.coords[dm.S == self.events.types].dec.to_value(u.rad)
                 sindecs = np.sin(decs)
@@ -2335,9 +2365,10 @@ class StanFit(SourceInfo):
                 fit_inputs["bg_llh"][dm.S == self.events.types] = np.log(
                     prob_ereco_and_omega
                     * E_true_norm  # accounts for E_nu integral, with a flat log(E) distribution
-                    / inverse_norm  # properly normalises to number of events in ROI
+                    * N_dm  # properly normalises to number of events in ROI
                     / time_norm  # properly normalises time because we use in the N_dm / N step the entire
                     # lifetime of the detector configuration
+                    / self.events.N
                 )
 
         # use the Eres slices for each event as data input
