@@ -1725,7 +1725,10 @@ class StanFit(SourceInfo):
         fit._def_var_names = []
 
         if sources.point_source:
-            fit._def_var_names.append("L")
+            if "L" in fit.keys():
+                fit._def_var_names.append("L")
+            else:
+                fit._def_var_names.append("L_ind")
             fit._def_var_names.append("Nex_src")
 
         if "src_index_grid" in fit_inputs.keys():
@@ -1737,11 +1740,18 @@ class StanFit(SourceInfo):
         if "E0_src_grid" in fit_inputs.keys():
             fit._def_var_names.append("E0_src")
 
-        if "diff_index_grid" in fit_inputs.keys():
+        if "eta_grid" in fit_inputs.keys():
+            fit._def_var_names.append("eta")
+            if "pressure_ratio" in fit.keys():
+                fit._def_var_names.append("pressure_ratio")
+            else:
+                fit._def_var_names.append("pressure_ratio_ind")
+
+        if sources.diffuse:
             fit._def_var_names.append("diffuse_norm")
             fit._def_var_names.append("diff_index")
 
-        if "atmo_integ_val" in fit_inputs.keys():
+        if sources.atmospheric:
             fit._def_var_names.append("F_atmo")
 
         if "ang_sys_deg" in outputs.keys():
@@ -1959,11 +1969,7 @@ class StanFit(SourceInfo):
         else:
             return self._fit_output.num_draws_sampling
 
-    def _get_event_classifications(self):
-        """
-        Get list of event classifications
-        """
-
+    def _get_event_association_dist(self):
         # logprob (lp) is a misnomer, this is actually the rate parameter of each source component
         if not self._reload:
             logprob = self._fit_output.stan_variable("lp").transpose(1, 2, 0)
@@ -1984,6 +1990,14 @@ class StanFit(SourceInfo):
         # the sum normalises to all source components
         ratio = np.exp(logprob) / np.sum(np.exp(logprob), axis=1)[:, np.newaxis, :]
         # axes are now event, component, sample
+        return ratio
+
+    def _get_event_classifications(self):
+        """
+        Get list of event classifications
+        """
+
+        ratio = self._get_event_association_dist()
         # average over samples, hence axis=-1
         assoc_prob = np.average(ratio, axis=-1).tolist()
         return assoc_prob
