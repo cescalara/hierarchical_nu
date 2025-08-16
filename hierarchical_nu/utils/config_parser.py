@@ -751,8 +751,12 @@ class ConfigParser:
                 raise NotImplementedError("Prior type not recognised.")
 
             if p == "src_index":
-                self.check_units(mu, 1)
-                self.check_units(sigma, 1)
+                if prior != Ignorance:
+                    self.check_units(mu, 1)
+                    self.check_units(sigma, 1)
+                else:
+                    mu = 1.0
+                    sigma = 1.0
                 priors.src_index = _make_prior(
                     MultiSourceIndexPrior, IndexPrior, prior, mu, sigma, False, False
                 )
