@@ -2328,21 +2328,23 @@ class StanFit(SourceInfo):
                 # get number of events per detector config over the respective detector lifetime in that config
                 N_dm = 0
                 N_dm_sel = np.sum(self.events.types == dm.S)
-                for roi in ROIList.STACK:
-                    mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
+                # for roi in ROIList.STACK:
+                # mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
 
-                    roi._MJD_min = dm_mjd_min
-                    roi._MJD_max = dm_mjd_max
+                # roi._MJD_min = dm_mjd_min
+                # roi._MJD_max = dm_mjd_max
 
-                    N_dm += Events.from_ev_file(
-                        dm,
-                        apply_Emin_det=True,
-                        apply_spatial_cuts=False,
-                        apply_temporal_cuts=False,
-                    ).N
+                N_dm += Events.from_ev_file(
+                    dm,
+                    apply_Emin_det=False,
+                    apply_spatial_cuts=False,
+                    apply_temporal_cuts=False,
+                ).N
 
-                    roi._MJD_min = mjd_min
-                    roi._MJD_max = mjd_max
+                print(N_dm)
+
+                # roi._MJD_min = mjd_min
+                # roi._MJD_max = mjd_max
 
                 # inverse_norm = N_dm_sel / N_dm
 
