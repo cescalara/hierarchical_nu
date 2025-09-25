@@ -2300,23 +2300,25 @@ class StanFit(SourceInfo):
                 # get number of events per detector config over the respective detector lifetime in that config
                 N = 0
                 N_dm = np.sum(self.events.types == dm.S)
-                for roi in ROIList.STACK:
-                    mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
+                # for roi in ROIList.STACK:
+                # mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
 
-                    roi._MJD_min = dm_mjd_min
-                    roi._MJD_max = dm_mjd_max
+                # roi._MJD_min = dm_mjd_min
+                # roi._MJD_max = dm_mjd_max
 
-                    N += Events.from_ev_file(
-                        dm,
-                        apply_Emin_det=True,
-                        apply_spatial_cuts=False,
-                        apply_temporal_cuts=False,
-                    ).N
+                N_dm += Events.from_ev_file(
+                    dm,
+                    apply_Emin_det=False,
+                    apply_spatial_cuts=False,
+                    apply_temporal_cuts=False,
+                ).N
 
-                    roi._MJD_min = mjd_min
-                    roi._MJD_max = mjd_max
+                print(N_dm)
 
-                inverse_norm = N_dm / N
+                # roi._MJD_min = mjd_min
+                # roi._MJD_max = mjd_max
+
+                # inverse_norm = N_dm / N
 
                 decs = self.events.coords[dm.S == self.events.types].dec.to_value(u.rad)
                 sindecs = np.sin(decs)
@@ -2338,6 +2340,7 @@ class StanFit(SourceInfo):
                     / inverse_norm  # properly normalises to number of events in ROI
                     / time_norm  # properly normalises time because we use in the N_dm / N step the entire
                     # lifetime of the detector configuration
+                    / self.events.N
                 )
 
         # use the Eres slices for each event as data input
