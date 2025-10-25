@@ -2250,6 +2250,10 @@ class StanFit(SourceInfo):
             fit_inputs["P_mu"] = self._priors.pressure_ratio.mu
             fit_inputs["P_sigma"] = self._priors.pressure_ratio.sigma
 
+        if self._priors.Nex_src.name in ["normal", "lognormal"]:
+            fit_inputs["Nex_mu"] = self._priors.Nex_src.mu
+            fit_inputs["Nex_sigma"] = self._priors.Nex_src.sigma
+
         if self._priors.eta.name in ["normal", "lognormal"]:
             fit_inputs["eta_mu"] = self._priors.eta.mu
             fit_inputs["eta_sigma"] = self._priors.eta.sigma

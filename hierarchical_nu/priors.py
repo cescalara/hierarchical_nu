@@ -310,6 +310,7 @@ class PriorDictHandler:
             "ang_sys": AngularPrior,
             "eta": EtaPrior,
             "pressure_ratio": PressureRatioPrior,
+            "Nex_src": NexPrior,
         }
         prior_name = prior_dict["name"]
         prior = translate[prior_dict["quantity"]]
@@ -554,6 +555,23 @@ class AngularPrior(UnitPrior):
     ):
         super().__init__(name, mu=mu, sigma=sigma, lam=lam, units=self.UNITS)
 
+class NexPrior(UnitlessPrior):
+    @u.quantity_input
+    def __init__(
+        self,
+        name=NormalPrior,
+        mu=10.,
+        sigma=5.,
+    ):
+        """
+        Prior on number of expected events
+        """
+        super().__init__(
+            name,
+            mu=mu,
+            sigma=sigma,
+            units=self.UNITS,
+        )
 
 class LuminosityPrior(UnitPrior):
     """
@@ -830,6 +848,8 @@ class Priors(object):
 
         self.ang_sys = AngularPrior()
 
+        self.Nex_src = NexPrior()
+
     @property
     def pressure_ratio(self):
         return self._pressure_ratio
@@ -869,6 +889,16 @@ class Priors(object):
         if not isinstance(prior, LuminosityPrior):
             raise ValueError("Wrong prior type")
         self._luminosity = prior
+
+    @property
+    def Nex_src(self):
+        return self._nex_prior
+
+    @Nex_src.setter
+    def Nex_src(self, prior: NexPrior):
+        if not isinstance(prior, NexPrior):
+            raise ValueError("Wrong prior type")
+        self._nex_prior = prior
 
     @property
     def diffuse_flux(self):
@@ -954,6 +984,8 @@ class Priors(object):
         priors_dict["pressure_ratio"] = self.pressure_ratio
 
         priors_dict["ang_sys"] = self.ang_sys
+
+        priors_dict["Nex_src"] = self.Nex_src
 
         return priors_dict
 
@@ -1098,6 +1130,11 @@ class Priors(object):
 
         try:
             priors.E0_src = priors_dict["E0_src"]
+        except KeyError:
+            pass
+
+        try:
+            priors.Nex_src = priors_dict["Nex_src"]
         except KeyError:
             pass
 
