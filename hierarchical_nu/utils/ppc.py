@@ -76,6 +76,7 @@ class PPC:
         figsize=(6, 3),
         colors=None,
         alpha=0.2,
+        axs=None,
     ):
         """
         Plot diagnostic PPCs
@@ -102,7 +103,11 @@ class PPC:
             r"$\hat{E}~[\si{\GeV}]$",
         ]
 
-        fig, axs = plt.subplots(1, 2, figsize=figsize)
+        try:
+            fig = axs[0].gcf()
+        except:
+            fig, axs = plt.subplots(1, 2, figsize=figsize)
+        
 
         # Squared angular distance posterior predictive check
         # use squared distance for approximately flat background distribution

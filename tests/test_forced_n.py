@@ -309,7 +309,7 @@ def test_asimov():
 
     sim.run()
 
-    assert np.rint(np.sum(sim._Nex_et)) == np.sum(list(sim._N.values()))
+    assert np.sum(np.rint(sim._Nex_et.sum(axis=0))) == np.sum(list(sim._N.values()))
 
     my_sources.add(point_source_2)
 
@@ -324,4 +324,4 @@ def test_asimov():
     sim.setup_stan_sim()
     sim.run()
 
-    assert np.rint(np.sum(sim._Nex_et)) == np.sum(list(sim._N.values()))
+    assert np.sum(np.rint(sim._Nex_et.sum(axis=0))) == np.sum(list(sim._N.values()))

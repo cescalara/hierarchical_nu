@@ -2285,8 +2285,8 @@ class R2021EnergyResolution(GridInterpolationEnergyResolution, HistogramSampler)
                     self._log_tE_binc,
                     # convolved,
                     np.log(self._evaluations[c]),
-                    kx=2,
-                    ky=2,
+                    kx=3,
+                    ky=3,
                 )
             )
 

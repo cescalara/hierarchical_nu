@@ -7,6 +7,7 @@ from ..priors import (
     IndexPrior,
     FluxPrior,
     DifferentialFluxPrior,
+    NexPrior,
     EnergyPrior,
     MultiSourceEnergyPrior,
     MultiSourceIndexPrior,
@@ -597,6 +598,8 @@ class ConfigParser:
         elif roi_config.roi_type == "NorthernSkyROI":
             NorthernSkyROI(MJD_min=MJD_min, MJD_max=MJD_max, apply_roi=apply_roi)
 
+        return ROIList.STACK
+
     def _is_dm_list(self):
         mjd_min = self.MJD_min
         mjd_max = self.MJD_max
@@ -864,6 +867,12 @@ class ConfigParser:
                     )
                 else:
                     raise NotImplementedError("Prior not recognised.")
+            elif p == "Nex_src":
+                self.check_units(mu, 1)
+                self.check_units(sigma, 1)
+                priors.Nex_src = NexPrior(
+                    prior, mu=mu, sigma=sigma
+                )
 
         return priors
 

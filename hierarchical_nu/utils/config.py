@@ -204,6 +204,13 @@ class PriorConfig:
             sigma=[1.0],
         )
     )
+    Nex_src: SinglePriorConfig = field(
+        default_factory=lambda: SinglePriorConfig(
+            name="Ignorance",
+            mu=[1.0],
+            sigma=[1.0]
+        )
+    )
 
 
 @dataclass

@@ -1217,7 +1217,9 @@ class StanFitInterface(StanInterface):
                     self._stan_prior_eta_sigma = eta_sigma_def
                 # check for luminosity, if they all have the same prior
                 if self._fit_nex or self._seyfert:
-                    pass
+                    if self._priors.Nex_src.name != "notaprior":
+                        self._stan_prior_nex_mu = ForwardVariableDef("Nex_mu", "real")
+                        self._stan_prior_nex_sigma = ForwardVariableDef("Nex_sigma", "real")
                 elif self._priors.luminosity.name in ["normal", "lognormal"]:
                     if isinstance(self._priors.luminosity, MultiSourcePrior):
                         mu_def = ForwardArrayDef("lumi_mu", "real", self._Ns_str)
@@ -2464,7 +2466,21 @@ class StanFitInterface(StanInterface):
             # Priors
             if self.sources.point_source:
 
-                if self._fit_nex or self._priors.pressure_ratio.name == "notaprior":
+                if self._fit_nex and not self._priors.Nex_src.name == "notaprior":
+                    StringExpression(
+                        [
+                            self._Nex_src,
+                            " ~ ",
+                            FunctionCall(
+                                [
+                                    self._stan_prior_nex_mu,
+                                    self._stan_prior_nex_sigma,
+                                ],
+                                self._priors.Nex_src.name
+                            )
+                        ]
+                    )    
+                elif self._priors.pressure_ratio.name == "notaprior":
                     pass
                 elif self._shared_luminosity and self._seyfert:
                     # use global prior for pressure ratio

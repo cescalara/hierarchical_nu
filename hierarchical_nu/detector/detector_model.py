@@ -99,7 +99,7 @@ class EffectiveArea(UserDefinedFunction, metaclass=ABCMeta):
         )
 
     def spline(self, logE, cosz):
-        return np.power(10, self.eff_area_spline((logE, cosz)))
+        return self.eff_area_spline((logE, cosz))
 
     @abstractmethod
     def setup(self) -> None:
