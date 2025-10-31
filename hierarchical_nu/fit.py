@@ -2290,19 +2290,19 @@ class StanFit(SourceInfo):
             fit_inputs["bg_llh"] = np.zeros(self.events.N)
 
             time = LifeTime()
-            time_norm = sum(
-                [
-                    time.lifetime_from_dm(dm)[dm].to_value(u.s)
-                    for dm in self._event_types
-                ]
-            )
+            # time_norm = sum(
+            #     [
+            #         time.lifetime_from_dm(dm)[dm].to_value(u.s)
+            #         for dm in self._event_types
+            #     ]
+            # )
 
             for dm in self._event_types:
 
                 dm_mjd_min, dm_mjd_max = time.mjd_from_dm(dm)
 
                 # get number of events per detector config over the respective detector lifetime in that config
-                N_dm = 0
+                # N_dm = 0
                 N_dm_sel = np.sum(self.events.types == dm.S)
                 # for roi in ROIList.STACK:
                 # mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
@@ -2310,7 +2310,7 @@ class StanFit(SourceInfo):
                 # roi._MJD_min = dm_mjd_min
                 # roi._MJD_max = dm_mjd_max
 
-                N_dm += Events.from_ev_file(
+                N_dm = Events.from_ev_file(
                     dm,
                     apply_Emin_det=False,
                     apply_spatial_cuts=False,
@@ -2321,7 +2321,7 @@ class StanFit(SourceInfo):
 
                 # roi._MJD_min = mjd_min
                 # roi._MJD_max = mjd_max
-
+                time_norm = time.lifetime_from_dm(dm)[dm].to_value(u.s)
                 # inverse_norm = N_dm / N
 
                 decs = self.events.coords[dm.S == self.events.types].dec.to_value(u.rad)
