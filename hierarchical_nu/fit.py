@@ -2195,10 +2195,9 @@ class StanFit(SourceInfo):
                     )
 
         # Inputs for priors of point sources
-        if self._priors.src_index.name not in ["normal", "lognormal"]:
-            raise ValueError("No other prior type for source index implemented.")
-        fit_inputs["src_index_mu"] = self._priors.src_index.mu
-        fit_inputs["src_index_sigma"] = self._priors.src_index.sigma
+        if self._priors.src_index.name in ["normal", "lognormal"]:
+            fit_inputs["src_index_mu"] = self._priors.src_index.mu
+            fit_inputs["src_index_sigma"] = self._priors.src_index.sigma
 
         if self._priors.luminosity.name == "lognormal":
             fit_inputs["lumi_mu"] = self._priors.luminosity.mu
