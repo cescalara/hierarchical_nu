@@ -2287,28 +2287,9 @@ class StanFit(SourceInfo):
                 )
         if self._sources.background:
             fit_inputs["bg_llh"] = np.zeros(self.events.N)
-
             time = LifeTime()
-            # time_norm = sum(
-            #     [
-            #         time.lifetime_from_dm(dm)[dm].to_value(u.s)
-            #         for dm in self._event_types
-            #     ]
-            # )
 
             for dm in self._event_types:
-
-                dm_mjd_min, dm_mjd_max = time.mjd_from_dm(dm)
-
-                # get number of events per detector config over the respective detector lifetime in that config
-                # N_dm = 0
-                N_dm_sel = np.sum(self.events.types == dm.S)
-                # for roi in ROIList.STACK:
-                # mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
-
-                # roi._MJD_min = dm_mjd_min
-                # roi._MJD_max = dm_mjd_max
-
                 N_dm = Events.from_ev_file(
                     dm,
                     apply_Emin_det=False,
@@ -2316,12 +2297,7 @@ class StanFit(SourceInfo):
                     apply_temporal_cuts=False,
                 ).N
 
-                print(N_dm)
-
-                # roi._MJD_min = mjd_min
-                # roi._MJD_max = mjd_max
                 time_norm = time.lifetime_from_dm(dm)[dm].to_value(u.s)
-                # inverse_norm = N_dm / N
 
                 decs = self.events.coords[dm.S == self.events.types].dec.to_value(u.rad)
                 sindecs = np.sin(decs)
@@ -2340,10 +2316,10 @@ class StanFit(SourceInfo):
                 fit_inputs["bg_llh"][dm.S == self.events.types] = np.log(
                     prob_ereco_and_omega
                     * E_true_norm  # accounts for E_nu integral, with a flat log(E) distribution
-                    * N_dm    # normalise to number of events in ROI
-                    / time_norm  # properly normalises time because we use in the N_dm / N step the entire
-                    # lifetime of the detector configuration
-                    / self.events.N
+                    * N_dm    # multiply pdf by N_dm / time_norm to get rate of event per time
+                    / time_norm
+                    / self.events.N   # divide by total number of selected events
+                                      # because we multiply in stan by parameter Nex_bg
                 )
 
         # use the Eres slices for each event as data input
