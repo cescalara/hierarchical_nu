@@ -245,6 +245,11 @@ class RateCalculator:
         detailed: int = 0,
         spectrum: str = "atmo",
     ):
+        """
+        Calculate rates using a linear transformation
+        on the binning of the two lowest energy bins of the IRF
+        new bins = old bins * a + b
+        """
 
         sindec_min = self.sindec_min
         sindec_max = self.sindec_max
@@ -277,14 +282,13 @@ class RateCalculator:
                 """
 
                 def sin_dec_int(sindec, logE):
-                    return self._aeff.spline(logE, -sindec) * np.power(
+                    return self._aeff.eff_area_spline((logE, -sindec)) * np.power(
                         10, self._atmo._flux_spline(-sindec, logE).squeeze()
                     )
 
                 sin_dec_integrated = quad(
                     sin_dec_int, sindec_min, sindec_max, args=(logE), limit=200
-                )[0]
-
+                )[0]                
                 return (
                     cdfs[etrue_idx]
                     * sin_dec_integrated
@@ -304,7 +308,7 @@ class RateCalculator:
                 """
 
                 def sin_dec_int(sindec, logE):
-                    return self._aeff._eff_area_spline((logE, -sindec)) * self._diff(
+                    return self._aeff.eff_area_spline((logE, -sindec)) * self._diff(
                         np.power(10, logE) * u.GeV, np.arcsin(sindec) * u.rad, 0 * u.rad
                     ).to_value(1 / u.GeV / u.cm**2 / u.s / u.sr)
 
@@ -377,7 +381,7 @@ class RateCalculator:
                 # This part can be split of from the energy integral and be calculated outside
                 # energies (true, in this case) is only a parameter but not an actual variable
                 def sin_dec_int(sindec, logE):
-                    return self._aeff.spline(logE, -sindec) * np.power(
+                    return self._aeff.eff_area_spline((logE, -sindec)) * np.power(
                         10, self._atmo._flux_spline(-sindec, logE).squeeze()
                     )
 
@@ -402,7 +406,7 @@ class RateCalculator:
                 etrue_idx = np.digitize(logE, self.tE_bin_edges) - 1
 
                 def sin_dec_int(sindec, logE):
-                    return self._aeff._eff_area_spline((logE, -sindec)) * self._diff(
+                    return self._aeff.eff_area_spline((logE, -sindec)) * self._diff(
                         np.power(10, logE) * u.GeV, np.arcsin(sindec) * u.rad, 0 * u.rad
                     ).to_value(1 / u.GeV / u.cm**2 / u.s / u.sr)
 
@@ -566,7 +570,7 @@ class RateCalculator:
                 ax.stairs(
                     rate,
                     self.Ebins,
-                    label=rf"$E=10^{{{(IRF_ebins[_bin]+IRF_ebins[_bin+1])/2:.2f}}}$ GeV",
+                    label=rf"$E=10^{{{IRF_ebins[_bin]:.1f}-{IRF_ebins[_bin+1]:.1f}}}\si{{\GeV}}$",
                 )
                 _bin += 1
             summed_rates = detailed_rates.sum(axis=1)

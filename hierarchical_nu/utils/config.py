@@ -24,7 +24,7 @@ class ParameterConfig:
     source_type: str = (
         "twice-broken-power-law"  # Currently only supports one type for all sources,
         # other options: "power-law" covering the entire energy range,
-        # or "logparabola", or "pgamma". If logparabola, up to two fit parameters used
+        # "logparabola", "pgamma" or "seyfert". If logparabola, up to two fit parameters used
         # (out of src_index, beta_index and E0_src) need to be defined
         # in the field "fit_params", e.g. fit_params: ["src_index", "beta_index"]
     )
@@ -38,6 +38,14 @@ class ParameterConfig:
     src_index_range: Tuple = (1.0, 4.0)
     beta_index: List[float] = field(default_factory=lambda: [0.0])
     beta_index_range: Tuple = (-1.0, 1.0)
+    eta: List[float] = field(
+        default_factory=lambda: [40.0]
+    )  # inverse turbulence strength
+    eta_range: Tuple = (2.0, 150.0)
+    P: List[float] = field(
+        default_factory=lambda: [0.4]
+    )  # cosmic ray to thermal pressure ratio
+    P_range: Tuple = (0.0, 0.5)
     Nex_src_range: Tuple = (0.0, 100.0)
     E0_src: List[str] = field(default_factory=lambda: ["1e6 GeV"])
     E0_src_range: Tuple[str] = ("1e3 GeV", "1e8 GeV")
@@ -118,6 +126,10 @@ class ParameterConfig:
     # use event tags, only relevant for multi ps fits
     use_event_tag: bool = False
 
+    logLx: List[float] = field(
+        default_factory=lambda: [43.62]
+    )  # log10(x-ray luminosity) in 2-10keV, only used for Seyfert spectra
+
 
 @dataclass
 class StanConfig:
@@ -166,7 +178,6 @@ class PriorConfig:
             name="LogNormalPrior", mu=["1e49 GeV s-1"], sigma=[3.0]
         )
     )
-
     diff_flux: SinglePriorConfig = field(
         default_factory=lambda: SinglePriorConfig(
             name="NormalPrior",
@@ -177,6 +188,27 @@ class PriorConfig:
     atmo_flux: SinglePriorConfig = field(
         default_factory=lambda: SinglePriorConfig(
             name="NormalPrior", mu="0.314 m-2 s-1", sigma="0.08 m-2 s-1"
+        )
+    )
+    eta: SinglePriorConfig = field(
+        default_factory=lambda: SinglePriorConfig(
+            name="Ignorance",
+            mu=[1.0],
+            sigma=[1.0],
+        )
+    )
+    P: SinglePriorConfig = field(
+        default_factory=lambda: SinglePriorConfig(
+            name="Ignorance",
+            mu=[1.0],
+            sigma=[1.0],
+        )
+    )
+    Nex_src: SinglePriorConfig = field(
+        default_factory=lambda: SinglePriorConfig(
+            name="Ignorance",
+            mu=[1.0],
+            sigma=[1.0]
         )
     )
 

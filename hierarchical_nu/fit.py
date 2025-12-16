@@ -36,6 +36,7 @@ from hierarchical_nu.source.flux_model import (
     TwiceBrokenPowerLaw,
     PowerLawSpectrum,
 )
+from hierarchical_nu.source.seyfert_model import SeyfertNuMuSpectrum
 from hierarchical_nu.source.cosmology import luminosity_distance
 from hierarchical_nu.detector.icecube import EventType, CAS, Refrigerator
 from hierarchical_nu.detector.r2021 import (
@@ -43,11 +44,7 @@ from hierarchical_nu.detector.r2021 import (
 )
 from hierarchical_nu.precomputation import ExposureIntegral
 from hierarchical_nu.events import Events
-from hierarchical_nu.priors import (
-    Priors,
-    UnitPrior,
-    MultiSourcePrior,
-)
+from hierarchical_nu.priors import Priors, UnitPrior, MultiSourcePrior, NoPriorSetError, AngularPrior
 from hierarchical_nu.source.source import uv_to_icrs
 
 from hierarchical_nu.stan.interface import STAN_PATH, STAN_GEN_PATH
@@ -57,15 +54,16 @@ from hierarchical_nu.utils.config import HierarchicalNuConfig
 from hierarchical_nu.utils.config_parser import ConfigParser
 from hierarchical_nu.utils.lifetime import LifeTime
 from hierarchical_nu.utils.roi import ROIList
+from .source.source_info import SourceInfo
 
 from omegaconf import OmegaConf
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.WARNING)
 
 
-class StanFit:
+class StanFit(SourceInfo):
     """
     To set up and run fits in Stan.
     """
@@ -102,7 +100,7 @@ class StanFit:
         :param reload: set to True if no stan interface should be created, i.e. reloading results
         """
 
-        self._sources = sources
+        super().__init__(sources)
         # self._detector_model_type = detector_model
         if not isinstance(event_types, list):
             event_types = [event_types]
@@ -119,12 +117,6 @@ class StanFit:
         self._nshards = nshards
         self._priors = priors
         self._use_event_tag = use_event_tag
-
-        self._sources.organise()
-
-        self._bg = False
-        if self._sources.background:
-            self._bg = True
 
         stan_file_name = os.path.join(STAN_GEN_PATH, "model_code")
 
@@ -163,73 +155,6 @@ class StanFit:
         logger_code_gen = logging.getLogger("hierarchical_nu.backend.code_generator")
         logger_code_gen.propagate = False
 
-        # Check if we should use Nex_src directly as fit parameter and not use L
-        try:
-            Parameter.get_parameter("Nex_src")
-            self._use_nex = True
-        except ValueError:
-            self._use_nex = False
-
-        # Check for shared luminosity and src_index params
-        try:
-            Parameter.get_parameter("luminosity")
-            self._shared_luminosity = True
-        except ValueError:
-            self._shared_luminosity = False
-
-        if self._sources.point_source:
-            try:
-                ang_sys = Parameter.get_parameter("ang_sys_add")
-                self._ang_sys = True
-                self._fit_ang_sys = not ang_sys.fixed
-            except ValueError:
-                self._ang_sys = False
-                self._fit_ang_sys = False
-            self._shared_src_index = False
-            self._power_law = False
-            self._logparabola = False
-            self._pgamma = False
-            index = self._sources.point_source[0].parameters["index"]
-            if not index.fixed and index.name == "src_index":
-                self._shared_src_index = True
-            elif not index.fixed:
-                self._shared_src_index = False
-            self._power_law = self._sources.point_source_spectrum in [
-                PowerLawSpectrum,
-                TwiceBrokenPowerLaw,
-            ]
-            self._logparabola = (
-                self._sources.point_source_spectrum == LogParabolaSpectrum
-            )
-            self._pgamma = self._sources.point_source_spectrum == PGammaSpectrum
-            if self._logparabola or self._pgamma:
-                beta = self._sources.point_source[0].parameters["beta"]
-                E0_src = self._sources.point_source[0].parameters["norm_energy"]
-                if not beta.fixed and beta.name == "beta_index":
-                    self._shared_src_index = True
-                elif not E0_src.fixed and E0_src.name == "E0_src":
-                    self._shared_src_index = True
-
-            self._fit_index = not index.fixed
-            if self._logparabola or self._pgamma:
-                beta = self._sources.point_source[0].parameters["beta"]
-                E0_src = self._sources.point_source[0].parameters["norm_energy"]
-                self._fit_beta = not beta.fixed
-                self._fit_Enorm = not E0_src.fixed
-            else:
-                self._fit_beta = False
-                self._fit_Enorm = False
-        else:
-            self._shared_src_index = False
-            self._fit_index = False
-            self._fit_beta = False
-            self._fit_Enorm = False
-            self._power_law = False
-            self._logparabola = False
-            self._pgamma = False
-            self._ang_sys = False
-            self._fit_ang_sys = False
-
         # For use with plot methods
         self._def_var_names = []
 
@@ -237,14 +162,16 @@ class StanFit:
             self._def_var_names.append("L")
             if self._fit_index:
                 self._def_var_names.append("src_index")
-
             if self._fit_beta:
                 self._def_var_names.append("beta_index")
             if self._fit_Enorm:
                 self._def_var_names.append("E0_src")
+            if self._fit_eta:
+                self._def_var_names.append("eta")
+            if self._seyfert:
+                self._def_var_names.append("P_R")
             if self._fit_ang_sys:
                 self._def_var_names.append("ang_sys_deg")
-
             self._def_var_names.append("Nex_src")
 
         if self._sources.diffuse:
@@ -400,15 +327,33 @@ class StanFit:
             **kwargs,
         )
 
+    def keys(self):
+        if self._reload:
+            return self._fit_output.keys()
+        else:
+            return self._fit_output.stan_variables()
+
     def __getitem__(self, key):
         """
         Return samples from chains
         :param key: Variable name
         """
+
         if self._reload:
-            return self._fit_output[key]
+            data = self._fit_output[key]
         else:
-            return self._fit_output.stan_variable(key)
+            data = self._fit_output.stan_variable(key)
+
+        shape = (
+            self.chains,
+            self.iterations,
+            int(data.size / self.chains / self.iterations),
+        )
+
+        if self._reload:
+            return self._fit_output[key].reshape(shape)
+        else:
+            return self._fit_output.stan_variable(key).reshape(shape)
 
     def setup_and_run(
         self,
@@ -515,14 +460,18 @@ class StanFit:
 
         def draw_prior(prior, ax, x):
             pdf = prior.pdf
-            ax.plot(x, pdf(x * prior.UNITS), color="black", alpha=0.4, zorder=0)
+            plot = pdf(x * prior.UNITS)
+            ax.plot(x, plot, color="black", alpha=0.4, zorder=0)
 
         for ax_double in axs:
             name = ax_double[0].get_title()
             # check if there is a prior available for the variable
             try:
                 # If so, get it and plot it
-                prior = priors_dict[name]
+                if "ang_sys" in name:
+                    prior = priors_dict["ang_sys"]
+                else:
+                    prior = priors_dict[name]
                 ax = ax_double[0]
                 supp = ax.get_xlim()
                 x = np.linspace(*supp, 1000)
@@ -554,7 +503,7 @@ class StanFit:
                         title = f"{name} [{unit.to_string('latex_inline')}]"
                     ax.set_title(title)
 
-            except KeyError:
+            except (KeyError, NoPriorSetError):
                 pass
 
         fig = axs.flatten()[0].get_figure()
@@ -592,7 +541,7 @@ class StanFit:
         if not var_names:
             var_names = self._def_var_names
 
-        var_names.pop("Nex")
+        # var_names.pop("Nex")
 
         # Organise samples
         samples_list = []
@@ -1102,6 +1051,10 @@ class StanFit:
             E0 = self["E0_src"]
         elif self._logparabola:
             E0 = inputs["E0_src"]
+        if self._fit_eta:
+            eta = self["eta"]
+        elif self._seyfert:
+            eta = inputs["eta"]
         F = self["F"]
 
         F = F.reshape((iterations * chains, F.size // (iterations * chains)))
@@ -1111,6 +1064,8 @@ class StanFit:
             N = beta.size // (iterations * chains)
         elif self._fit_Enorm:
             N = E0.size // (iterations * chains)
+        elif self._fit_eta:
+            N = eta.size // (iterations * chains)
 
         share_index = N == 1
         N_samples = iterations * chains
@@ -1128,6 +1083,8 @@ class StanFit:
                     beta_vals = beta.flatten()
                 if self._fit_Enorm:
                     E0_vals = E0.flatten()
+                if self._fit_eta:
+                    eta_vals = eta.flatten()
 
             else:
                 if self._fit_index:
@@ -1136,8 +1093,10 @@ class StanFit:
                     beta_vals = beta[:, c_ps].flatten()
                 if self._fit_Enorm:
                     E0_vals = E0[:, c_ps].flatten()
+                if self._fit_eta:
+                    eta_vals = eta[:, c_ps].flatten()
 
-            if not self._fit_index and not self._pgamma:
+            if not self._fit_index and not self._pgamma and not self._seyfert:
                 index_vals = alpha[c_ps]
                 ps.flux_model.spectral_shape.set_parameter("index", index_vals)
 
@@ -1150,6 +1109,9 @@ class StanFit:
                 ps.flux_model.spectral_shape.set_parameter(
                     "norm_energy", E0_vals * u.GeV
                 )
+            if not self._fit_eta and self._seyfert:
+                eta_vals = eta[c_ps]
+                ps.flux_model.spectral_shape.set_parameter("eta", eta_vals)
 
             flux_int = F[:, c_ps].flatten() << 1 / u.m**2 / u.s
 
@@ -1166,6 +1128,8 @@ class StanFit:
                     ps.flux_model.spectral_shape.set_parameter(
                         "norm_energy", E0_vals[c] * u.GeV
                     )
+                if self._fit_eta:
+                    ps.flux_model.spectral_shape.set_parameter("eta", eta_vals[c])
 
                 flux = ps.flux_model.spectral_shape(E)  # 1 / GeV / s / m2
 
@@ -1537,7 +1501,7 @@ class StanFit:
                 if key == "irf_return":
                     n_entries = len(value[0])
                     for n in range(n_entries):
-                        if value[0][n].ndim < 2:
+                        if len(value[0][n].shape) >= 1:
                             out = np.concatenate([_[n] for _ in value])
                         else:
                             out = np.vstack([_[n] for _ in value])
@@ -1734,7 +1698,10 @@ class StanFit:
         fit._def_var_names = []
 
         if sources.point_source:
-            fit._def_var_names.append("L")
+            if "L" in fit.keys():
+                fit._def_var_names.append("L")
+            else:
+                fit._def_var_names.append("L_ind")
             fit._def_var_names.append("Nex_src")
 
         if "src_index_grid" in fit_inputs.keys():
@@ -1746,12 +1713,22 @@ class StanFit:
         if "E0_src_grid" in fit_inputs.keys():
             fit._def_var_names.append("E0_src")
 
-        if "diff_index_grid" in fit_inputs.keys():
+        if "eta_grid" in fit_inputs.keys():
+            fit._def_var_names.append("eta")
+            if "pressure_ratio" in fit.keys():
+                fit._def_var_names.append("pressure_ratio")
+            else:
+                fit._def_var_names.append("pressure_ratio_ind")
+
+        if sources.diffuse:
             fit._def_var_names.append("diffuse_norm")
             fit._def_var_names.append("diff_index")
 
-        if "atmo_integ_val" in fit_inputs.keys():
+        if sources.atmospheric:
             fit._def_var_names.append("F_atmo")
+
+        if "ang_sys_deg" in outputs.keys():
+            fit._def_var_names.append("ang_sys_deg")
 
         return fit
 
@@ -1835,13 +1812,18 @@ class StanFit:
 
         obs_time_dict = {et: obs_time[k] for k, et in enumerate(event_types)}
 
-        try:
-            priors = Priors.from_group(filename, "priors")
-        except KeyError:
-            # lazy fix for backwards compatibility
-            priors = Priors()
+        # try:
+        priors = Priors.from_group(filename, "priors")
+        #except KeyError:
+        #    # lazy fix for backwards compatibility
+        #    priors = Priors()
 
-        events = Events.from_file(filename, apply_cuts=False)
+        events = Events.from_file(
+            filename,
+            apply_Emin_det=False,
+            apply_spatial_cuts=False,
+            apply_temporal_cuts=False,
+        )
 
         try:
             Emin_det = fit_inputs["Emin_det"]
@@ -1960,11 +1942,7 @@ class StanFit:
         else:
             return self._fit_output.num_draws_sampling
 
-    def _get_event_classifications(self):
-        """
-        Get list of event classifications
-        """
-
+    def _get_event_association_dist(self):
         # logprob (lp) is a misnomer, this is actually the rate parameter of each source component
         if not self._reload:
             logprob = self._fit_output.stan_variable("lp").transpose(1, 2, 0)
@@ -1985,6 +1963,14 @@ class StanFit:
         # the sum normalises to all source components
         ratio = np.exp(logprob) / np.sum(np.exp(logprob), axis=1)[:, np.newaxis, :]
         # axes are now event, component, sample
+        return ratio
+
+    def _get_event_classifications(self):
+        """
+        Get list of event classifications
+        """
+
+        ratio = self._get_event_association_dist()
         # average over samples, hence axis=-1
         assoc_prob = np.average(ratio, axis=-1).tolist()
         return assoc_prob
@@ -2127,6 +2113,7 @@ class StanFit:
                 key = "src_index"
                 key_beta = "beta_index"
                 key_Enorm = "E0_src"
+                key_eta = "eta"
 
             # Otherwise just use first source in the list
             # src_index_grid is identical for all point sources
@@ -2134,6 +2121,7 @@ class StanFit:
                 key = "%s_src_index" % self._sources.point_source[0].name
                 key_beta = "%s_beta_index" % self._sources.point_source[0].name
                 key_Enorm = "%s_E0_src" % self._sources.point_source[0].name
+                key_eta = "%s_eta" % self._sources.point_source[0].name
 
             if self._fit_index:
                 fit_inputs["src_index_grid"] = self._exposure_integral[
@@ -2148,12 +2136,15 @@ class StanFit:
                     for ps in self._sources.point_source
                 ]
 
-            if self._use_nex:
+            if self._fit_nex:
                 fit_inputs["Nex_src_min"] = self._nex_par_range[0]
                 fit_inputs["Nex_src_max"] = self._nex_par_range[1]
 
-            fit_inputs["Lmin"] = self._lumi_par_range[0]
-            fit_inputs["Lmax"] = self._lumi_par_range[1]
+            try:
+                fit_inputs["Lmin"] = self._lumi_par_range[0]
+                fit_inputs["Lmax"] = self._lumi_par_range[1]
+            except AttributeError:
+                pass
 
             if self._fit_beta:
                 fit_inputs["beta_index_grid"] = self._exposure_integral[
@@ -2189,6 +2180,12 @@ class StanFit:
                     for ps in self._sources.point_source
                 ]
 
+            if self._fit_eta:
+                fit_inputs["eta_grid"] = self._exposure_integral[event_type].par_grids[
+                    key_eta
+                ]
+                fit_inputs["eta_min"], fit_inputs["eta_max"] = self._eta_par_range
+                fit_inputs["P_min"], fit_inputs["P_max"] = self._P_par_range
             if self._fit_ang_sys:
                 fit_inputs["ang_sys_mu"] = self._priors.ang_sys.mu.to_value(u.rad)
                 fit_inputs["ang_sys_sigma"] = self._priors.ang_sys.sigma.to_value(u.rad)
@@ -2198,10 +2195,9 @@ class StanFit:
                     )
 
         # Inputs for priors of point sources
-        if self._priors.src_index.name not in ["normal", "lognormal"]:
-            raise ValueError("No other prior type for source index implemented.")
-        fit_inputs["src_index_mu"] = self._priors.src_index.mu
-        fit_inputs["src_index_sigma"] = self._priors.src_index.sigma
+        if self._priors.src_index.name in ["normal", "lognormal"]:
+            fit_inputs["src_index_mu"] = self._priors.src_index.mu
+            fit_inputs["src_index_sigma"] = self._priors.src_index.sigma
 
         if self._priors.luminosity.name == "lognormal":
             fit_inputs["lumi_mu"] = self._priors.luminosity.mu
@@ -2220,6 +2216,18 @@ class StanFit:
             fit_inputs["lumi_alpha"] = self._priors.luminosity.alpha
         else:
             raise ValueError("No other prior type for luminosity implemented.")
+
+        if self._priors.pressure_ratio.name in ["normal", "lognormal"]:
+            fit_inputs["P_mu"] = self._priors.pressure_ratio.mu
+            fit_inputs["P_sigma"] = self._priors.pressure_ratio.sigma
+
+        if self._priors.Nex_src.name in ["normal", "lognormal"]:
+            fit_inputs["Nex_mu"] = self._priors.Nex_src.mu
+            fit_inputs["Nex_sigma"] = self._priors.Nex_src.sigma
+
+        if self._priors.eta.name in ["normal", "lognormal"]:
+            fit_inputs["eta_mu"] = self._priors.eta.mu
+            fit_inputs["eta_sigma"] = self._priors.eta.sigma
 
         if self._sources.diffuse:
             # Just take any for now, using default parameters it doesn't matter
@@ -2279,34 +2287,17 @@ class StanFit:
                 )
         if self._sources.background:
             fit_inputs["bg_llh"] = np.zeros(self.events.N)
-
             time = LifeTime()
-            time_norm = sum(
-                [
-                    time.lifetime_from_dm(dm)[dm].to_value(u.s)
-                    for dm in self._event_types
-                ]
-            )
 
             for dm in self._event_types:
+                N_dm = Events.from_ev_file(
+                    dm,
+                    apply_Emin_det=False,
+                    apply_spatial_cuts=False,
+                    apply_temporal_cuts=False,
+                ).N
 
-                dm_mjd_min, dm_mjd_max = time.mjd_from_dm(dm)
-
-                # get number of events per detector config over the respective detector lifetime in that config
-                N = 0
-                N_dm = np.sum(self.events.types == dm.S)
-                for roi in ROIList.STACK:
-                    mjd_min, mjd_max = roi.MJD_min, roi.MJD_max
-
-                    roi._MJD_min = dm_mjd_min
-                    roi._MJD_max = dm_mjd_max
-
-                    N += Events.from_ev_file(dm, apply_roi=False).N
-
-                    roi._MJD_min = mjd_min
-                    roi._MJD_max = mjd_max
-
-                inverse_norm = N_dm / N
+                time_norm = time.lifetime_from_dm(dm)[dm].to_value(u.s)
 
                 decs = self.events.coords[dm.S == self.events.types].dec.to_value(u.rad)
                 sindecs = np.sin(decs)
@@ -2325,9 +2316,10 @@ class StanFit:
                 fit_inputs["bg_llh"][dm.S == self.events.types] = np.log(
                     prob_ereco_and_omega
                     * E_true_norm  # accounts for E_nu integral, with a flat log(E) distribution
-                    / inverse_norm  # properly normalises to number of events in ROI
-                    / time_norm  # properly normalises time because we use in the N_dm / N step the entire
-                    # lifetime of the detector configuration
+                    * N_dm    # multiply pdf by N_dm / time_norm to get rate of event per time
+                    / time_norm
+                    / self.events.N   # divide by total number of selected events
+                                      # because we multiply in stan by parameter Nex_bg
                 )
 
         # use the Eres slices for each event as data input
@@ -2473,7 +2465,7 @@ class StanFit:
         """
 
         if self._sources.point_source:
-            if self._use_nex:
+            if self._fit_nex:
                 Nex = Parameter.get_parameter("Nex_src")
                 self._nex_par_range = Nex.par_range
             # TODO make similar to spectral parameters, L is not appended to the parameter list of the source
@@ -2482,8 +2474,11 @@ class StanFit:
             else:
                 key = "%s_luminosity" % self._sources.point_source[0].name
 
-            self._lumi_par_range = Parameter.get_parameter(key).par_range
-            self._lumi_par_range = self._lumi_par_range.to_value(u.GeV / u.s)
+            try:
+                self._lumi_par_range = Parameter.get_parameter(key).par_range
+                self._lumi_par_range = self._lumi_par_range.to_value(u.GeV / u.s)
+            except ValueError:
+                pass
 
             if self._logparabola or self._power_law:
                 self._src_index_par_range = (
@@ -2496,6 +2491,13 @@ class StanFit:
             if self._logparabola or self._pgamma:
                 self._E0_src_par_range = (
                     self._sources.point_source[0].parameters["norm_energy"].par_range
+                )
+            if self._seyfert:
+                self._eta_par_range = (
+                    self._sources.point_source[0].parameters["eta"].par_range
+                )
+                self._P_par_range = (
+                    self._sources.point_source[0].parameters["P"].par_range
                 )
 
         if self._sources.diffuse:

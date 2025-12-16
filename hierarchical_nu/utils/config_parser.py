@@ -1,4 +1,4 @@
-from hierarchical_nu.priors import (
+from ..priors import (
     Priors,
     LogNormalPrior,
     NormalPrior,
@@ -7,30 +7,36 @@ from hierarchical_nu.priors import (
     IndexPrior,
     FluxPrior,
     DifferentialFluxPrior,
+    NexPrior,
     EnergyPrior,
     MultiSourceEnergyPrior,
     MultiSourceIndexPrior,
     MultiSourceLuminosityPrior,
+    EtaPrior,
+    MultiSourceEtaPrior,
+    PressureRatioPrior,
+    MultiSourcePressureRatioPrior,
+    Ignorance,
 )
-from hierarchical_nu.utils.config import HierarchicalNuConfig
-from hierarchical_nu.source.source import (
+from ..utils.config import HierarchicalNuConfig
+from ..source.source import (
     Sources,
     PointSource,
     SourceFrame,
     DetectorFrame,
 )
-from hierarchical_nu.source.parameter import Parameter, ParScale
-from hierarchical_nu.detector.icecube import Refrigerator
-from hierarchical_nu.utils.roi import (
+from ..source.parameter import Parameter, ParScale
+from ..detector.icecube import Refrigerator
+from ..utils.roi import (
     ROIList,
     CircularROI,
     NorthernSkyROI,
     FullSkyROI,
     RectangularROI,
 )
-from hierarchical_nu.detector.input import mceq
-from hierarchical_nu.utils.lifetime import LifeTime
-from hierarchical_nu.events import Events
+from ..detector.input import mceq
+from ..utils.lifetime import LifeTime
+from ..events import Events
 
 import omegaconf
 
@@ -84,6 +90,9 @@ class ConfigParser:
         index = []
         beta = []
         E0_src = []
+        eta = []
+        P = []
+
         if (
             parameter_config["source_type"] == "power-law"
             or parameter_config["source_type"] == "twice-broken-power-law"
@@ -192,6 +201,34 @@ class ConfigParser:
                         ParScale.log,
                     )
                 )
+
+        if parameter_config.source_type == "SeyfertII" and share_src_index:
+            name = "eta"
+            eta.append(
+                Parameter(
+                    parameter_config.eta[0],
+                    name,
+                    False,
+                    parameter_config.eta_range,
+                    ParScale.lin,
+                )
+            )
+
+        elif parameter_config.source_type == "SeyfertII":
+            for c, val in enumerate(parameter_config.eta):
+                name = f"ps_{c}_eta"
+                eta.append(
+                    Parameter(
+                        val,
+                        name,
+                        False,
+                        parameter_config.eta_range,
+                        ParScale.lin,
+                    )
+                )
+        if parameter_config.source_type == "SeyfertII":
+            logLx = parameter_config.logLx
+
         if "Nex_src" in parameter_config["fit_params"]:
             Nex_src = Parameter(
                 0.0, "Nex_src", fixed=True, par_range=parameter_config["Nex_src_range"]
@@ -204,7 +241,10 @@ class ConfigParser:
             par_range=parameter_config["diff_index_range"],
         )
         L = []
-        if not share_L:
+        # P acts as luminosity? I guess
+        # reuse share_L for P
+        P = []
+        if not share_L and not parameter_config.source_type == "SeyfertII":
             for c, Lumi in enumerate(parameter_config["L"]):
                 name = f"ps_{c}_luminosity"
                 L.append(
@@ -219,13 +259,13 @@ class ConfigParser:
                         * (u.GeV / u.s),
                     )
                 )
-        else:
+        elif not parameter_config.source_type == "SeyfertII":
             L.append(
                 Parameter(
                     u.Quantity(parameter_config["L"][0]),
                     "luminosity",
-                    False,
-                    tuple(
+                    fixed=True,
+                    par_range=tuple(
                         u.Quantity(_).to_value(u.GeV / u.s)
                         for _ in parameter_config["L_range"]
                     )
@@ -233,6 +273,27 @@ class ConfigParser:
                     / u.s,
                 )
             )
+        elif share_L:
+            P.append(
+                Parameter(
+                    parameter_config.P[0],
+                    "pressure_ratio",
+                    fixed=True,
+                    par_range=parameter_config.P_range,
+                )
+            )
+        else:
+            for c, pressure in enumerate(parameter_config.P):
+                name = f"ps_{c}_pressure_ratio"
+                P.append(
+                    Parameter(
+                        pressure,
+                        name,
+                        fixed=True,
+                        par_range=parameter_config.P_range,
+                    )
+                )
+
         diffuse_norm = Parameter(
             u.Quantity(parameter_config["diff_norm"]),
             "diffuse_norm",
@@ -299,16 +360,22 @@ class ConfigParser:
         sources = Sources()
 
         for c in range(len(dec)):
-            if share_L:
+            if share_L and not parameter_config.source_type == "SeyfertII":
                 Lumi = L[0]
-            else:
+            elif not parameter_config.source_type == "SeyfertII":
                 Lumi = L[c]
+            elif share_L:
+                _P = P[0]
+            else:
+                _P = P[c]
 
             if share_src_index:
                 if index and "src_index" in parameter_config["fit_params"]:
                     idx = index[0]
                 elif parameter_config.source_type == "pgamma":
                     pass
+                elif parameter_config.source_type == "SeyfertII":
+                    _eta = eta[0]
                 else:
                     idx = index[c]
                 if beta and "beta_index" in parameter_config["fit_params"]:
@@ -326,7 +393,9 @@ class ConfigParser:
                     idx_beta = beta[c]
                 if E0_src:
                     E0 = E0_src[c]
-            if not parameter_config.source_type == "pgamma":
+                if eta:
+                    _eta = eta[c]
+            if parameter_config.source_type not in ("pgamma", "SeyfertII"):
                 args = (
                     f"ps_{c}",
                     dec[c],
@@ -369,6 +438,17 @@ class ConfigParser:
                     Emin_src,
                     Emax_src,
                     frame,
+                )
+            elif parameter_config.source_type == "SeyfertII":
+                method = PointSource.make_seyfert_source
+                args = (
+                    f"ps_{c}",
+                    dec[c],
+                    ra[c],
+                    logLx[c],
+                    _P,
+                    _eta,
+                    parameter_config.z[c],
                 )
             point_source = method(*args)
 
@@ -518,6 +598,8 @@ class ConfigParser:
         elif roi_config.roi_type == "NorthernSkyROI":
             NorthernSkyROI(MJD_min=MJD_min, MJD_max=MJD_max, apply_roi=apply_roi)
 
+        return ROIList.STACK
+
     def _is_dm_list(self):
         mjd_min = self.MJD_min
         mjd_max = self.MJD_max
@@ -666,12 +748,18 @@ class ConfigParser:
                 prior = ParetoPrior
                 xmin = vals.xmin
                 alpha = vals.alpha
+            elif vals.name == "Ignorance":
+                prior = Ignorance
             else:
                 raise NotImplementedError("Prior type not recognised.")
 
             if p == "src_index":
-                self.check_units(mu, 1)
-                self.check_units(sigma, 1)
+                if prior != Ignorance:
+                    self.check_units(mu, 1)
+                    self.check_units(sigma, 1)
+                else:
+                    mu = 1.0
+                    sigma = 1.0
                 priors.src_index = _make_prior(
                     MultiSourceIndexPrior, IndexPrior, prior, mu, sigma, False, False
                 )
@@ -697,6 +785,28 @@ class ConfigParser:
                     sigma,
                     True,
                     sigma_unit,
+                )
+            elif p == "eta":
+                if prior != Ignorance:
+                    self.check_units(mu, 1)
+                    self.check_units(sigma, 1)
+                else:
+                    mu = 1.0
+                    sigma = 1.0
+                prior.eta = _make_prior(
+                    MultiSourceEtaPrior, EtaPrior, prior, mu, sigma, False, False
+                )
+            elif p == "P":
+                self.check_units(mu, 1)
+                self.check_units(sigma, 1)
+                priors.pressure_ratio = _make_prior(
+                    MultiSourcePressureRatioPrior,
+                    PressureRatioPrior,
+                    prior,
+                    mu,
+                    sigma,
+                    False,
+                    False,
                 )
             elif p == "L":
                 if prior == ParetoPrior:
@@ -757,6 +867,12 @@ class ConfigParser:
                     )
                 else:
                     raise NotImplementedError("Prior not recognised.")
+            elif p == "Nex_src":
+                self.check_units(mu, 1)
+                self.check_units(sigma, 1)
+                priors.Nex_src = NexPrior(
+                    prior, mu=mu, sigma=sigma
+                )
 
         return priors
 

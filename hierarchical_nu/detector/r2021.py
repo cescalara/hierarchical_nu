@@ -491,10 +491,10 @@ class R2021EffectiveArea(EffectiveArea):
 
         eff_area[eff_area == 0.0] = eff_area[eff_area > 0.0].min()
         with self:
-            area = StanArray(
+            logArea = StanArray(
                 "Area",
                 "real",
-                eff_area,
+                np.log10(eff_area),
             )
             log10_E_c = StanArray("log10_E_c", "real", np.log10(tE_binc))
             cos_z_c = StanArray("cosz_c", "real", cosz_binc)
@@ -506,8 +506,14 @@ class R2021EffectiveArea(EffectiveArea):
             ReturnStatement(
                 [
                     FunctionCall(
-                        [log10tE, cosz, log10_E_c, cos_z_c, area],
-                        "interp2d",
+                        [
+                            10,
+                            FunctionCall(
+                                    [log10tE, cosz, log10_E_c, cos_z_c, logArea],
+                                    "interp2d",
+                                )
+                        ],
+                        "pow",
                     )
                 ]
             )
@@ -2279,8 +2285,8 @@ class R2021EnergyResolution(GridInterpolationEnergyResolution, HistogramSampler)
                     self._log_tE_binc,
                     # convolved,
                     np.log(self._evaluations[c]),
-                    kx=2,
-                    ky=2,
+                    kx=3,
+                    ky=3,
                 )
             )
 

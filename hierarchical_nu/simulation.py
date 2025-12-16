@@ -43,13 +43,14 @@ from hierarchical_nu.utils.roi import ROI, CircularROI, ROIList
 from hierarchical_nu.stan.interface import STAN_PATH, STAN_GEN_PATH
 from hierarchical_nu.stan.sim_interface import StanSimInterface
 from hierarchical_nu.utils.git import git_hash
+from .source.source_info import SourceInfo
 
 
 sim_logger = logging.getLogger(__name__)
-sim_logger.setLevel(logging.DEBUG)
+sim_logger.setLevel(logging.WARNING)
 
 
-class Simulation:
+class Simulation(SourceInfo):
     """
     To set up and run simulations.
     """
@@ -79,7 +80,7 @@ class Simulation:
         :param asimov: set to True to simulate closest integer of expected number of events.
         """
 
-        self._sources = sources
+        super().__init__(sources)
         if not isinstance(event_types, list):
             event_types = [event_types]
         if not isinstance(observation_time, dict):
@@ -92,12 +93,6 @@ class Simulation:
         self._observation_time = observation_time
         self._n_grid_points = n_grid_points
         self._asimov = asimov
-
-        self._sources.organise()
-
-        self._bg = False
-        if self._sources.background:
-            self._bg = True
 
         self._exposure_integral = collections.OrderedDict()
 
@@ -154,64 +149,6 @@ class Simulation:
                 + "for IceCubeDetectorModel is not implemented. Just use "
                 + "NorthernTracksDetectorModel instead."
             )
-
-        # Check for shared luminosity and src_index params
-        try:
-            Parameter.get_parameter("luminosity")
-            self._shared_luminosity = True
-        except ValueError:
-            self._shared_luminosity = False
-
-        if self._sources.point_source:
-            self._shared_src_index = False
-            self._power_law = False
-            self._logparabola = False
-            self._pgamma = False
-            index = self._sources.point_source[0].parameters["index"]
-            if not index.fixed and index.name == "src_index":
-                self._shared_src_index = True
-            elif not index.fixed:
-                self._shared_src_index = False
-            self._power_law = self._sources.point_source_spectrum in [
-                PowerLawSpectrum,
-                TwiceBrokenPowerLaw,
-            ]
-            self._logparabola = (
-                self._sources.point_source_spectrum == LogParabolaSpectrum
-            )
-            self._pgamma = self._sources.point_source_spectrum == PGammaSpectrum
-            if self._logparabola or self._pgamma:
-                beta = self._sources.point_source[0].parameters["beta"]
-                E0_src = self._sources.point_source[0].parameters["norm_energy"]
-                if not beta.fixed and beta.name == "beta_index":
-                    self._shared_src_index = True
-                elif not E0_src.fixed and E0_src.name == "E0_src":
-                    self._shared_src_index = True
-
-            self._fit_index = not index.fixed
-            if self._logparabola or self._pgamma:
-                beta = self._sources.point_source[0].parameters["beta"]
-                E0_src = self._sources.point_source[0].parameters["norm_energy"]
-                self._fit_beta = not beta.fixed
-                self._fit_Enorm = not E0_src.fixed
-            else:
-                self._fit_beta = False
-                self._fit_Enorm = False
-        else:
-            self._shared_src_index = False
-            self._fit_index = False
-            self._fit_beta = False
-            self._fit_Enorm = False
-            self._logparabola = False
-            self._power_law = False
-            self._pgamma = False
-
-        # Check for shared luminosity and src_index params
-        try:
-            Parameter.get_parameter("luminosity")
-            self._shared_luminosity = True
-        except ValueError:
-            self._shared_luminosity = False
 
         self.events = None
 
@@ -728,7 +665,7 @@ class Simulation:
         if asimov:
             # Round expected number of events to nearest integer per source
             # distribute this number weighted with the Nex per event type over the event types
-            N = np.rint(self._Nex_et.sum(axis=0)).astype(int)
+            N = np.rint(self._Nex_et.sum(axis=0)).astype(int)   # total number of events to be observed
             if not self.sources.background:
                 self._N = np.zeros_like(self._Nex_et)
             else:
@@ -742,7 +679,8 @@ class Simulation:
                     N[:, c] = 0
                     continue
 
-                # Sample et_idx for each source
+                # Sample et_idx for each source,
+                # takes asimov-number of events separately for each source
                 et_idx = np.random.choice(
                     range(len(self._event_types)),
                     p=weights,
@@ -764,31 +702,45 @@ class Simulation:
             # That means we need to check over which parameters is interpolated in the 1D or 2D grid,
             # hence we check which parameters would be free in a fit.
 
-            key_index = self._sources.point_source[0].parameters["index"].name
-
             lumi_units = u.GeV / u.s
 
-            try:
-                sim_inputs["L"] = [
-                    Parameter.get_parameter("%s_luminosity" % s.name).value.to_value(
-                        lumi_units
-                    )
-                    for s in self._sources.point_source
-                ]
-            # If the individual parameters are not found we have a global luminosity
-            except ValueError:
+            # Change this to check for pressure ratio first if we are using a Seyfert source
+            if self._seyfert:
                 try:
-                    sim_inputs["L"] = [
-                        Parameter.get_parameter("luminosity").value.to_value(lumi_units)
+                    sim_inputs["pressure_ratio"] = [
+                        Parameter.get_parameter("pressure_ratio").value
                     ] * len(self._sources.point_source)
                 except ValueError:
-                    sim_inputs["L"] = [np.nan] * len(self._sources.point_source)
+                    sim_inputs["pressure_ratio"] = [
+                        Parameter.get_parameter("%s_pressure_ratio" % s.name)
+                        for s in self._sources.point_source
+                    ]
+                sim_inputs["L"] = [np.nan] * len(self._sources.point_source)
+            else:
+                try:
+                    sim_inputs["L"] = [
+                        Parameter.get_parameter(
+                            "%s_luminosity" % s.name
+                        ).value.to_value(lumi_units)
+                        for s in self._sources.point_source
+                    ]
+                # If the individual parameters are not found we have a global luminosity
+                except ValueError:
+                    try:
+                        sim_inputs["L"] = [
+                            Parameter.get_parameter("luminosity").value.to_value(
+                                lumi_units
+                            )
+                        ] * len(self._sources.point_source)
+                    except ValueError:
+                        sim_inputs["L"] = [np.nan] * len(self._sources.point_source)
 
             # Check for shared source index
             if self._shared_src_index:
                 key = "src_index"
                 key_beta = "beta_index"
                 key_Enorm = "E0_src"
+                key_eta = "eta"
 
             # Otherwise just use first source in the list
             # grids is identical for all point sources
@@ -796,6 +748,7 @@ class Simulation:
                 key = "%s_src_index" % self._sources.point_source[0].name
                 key_beta = "%s_beta_index" % self._sources.point_source[0].name
                 key_Enorm = "%s_E0_src" % self._sources.point_source[0].name
+                key_eta = "%s_eta" % self.sources.point_source[0].name
 
             event_type = self._event_types[0]
             # This is a weird construct
@@ -808,7 +761,6 @@ class Simulation:
                     ps.flux_model.parameters["index"].value
                     for ps in self._sources.point_source
                 ]
-
             if self._fit_beta:
                 sim_inputs["beta_index_grid"] = self._exposure_integral[
                     event_type
@@ -818,7 +770,6 @@ class Simulation:
                     ps.flux_model.parameters["beta"].value
                     for ps in self._sources.point_source
                 ]
-
             if self._fit_Enorm:
                 sim_inputs["E0_src_grid"] = self._exposure_integral[
                     event_type
@@ -828,9 +779,18 @@ class Simulation:
                     ps.flux_model.parameters["norm_energy"].value.to_value(u.GeV)
                     for ps in self._sources.point_source
                 ]
+            if self._fit_eta:
+                sim_inputs["eta_grid"] = self._exposure_integral[event_type].par_grids[
+                    key_eta
+                ]
             if self._pgamma:
                 sim_inputs["src_index"] = [
                     ps.flux_model.spectral_shape._src_index
+                    for ps in self._sources.point_source
+                ]
+            if self._seyfert:
+                sim_inputs["eta"] = [
+                    ps.flux_model.parameters["eta"].value
                     for ps in self._sources.point_source
                 ]
 
@@ -1074,6 +1034,8 @@ class Simulation:
             spectrum = "pgamma"
         elif self._power_law:
             spectrum = "power_law"
+        elif self._seyfert:
+            spectrum = "seyfert"
         else:
             spectrum = "none"
 
@@ -1084,6 +1046,8 @@ class Simulation:
             fit_params.append("beta_index")
         if self._fit_Enorm:
             fit_params.append("E0_src")
+        if self._fit_eta:
+            fit_params.append("eta")
 
         Nex_et = np.zeros((len(self._event_types), self._sources.N))
         for c, event_type in enumerate(self._event_types):
@@ -1175,6 +1139,7 @@ class SimInfo:
             pgamma = False
             powerlaw = False
             logparabola = False
+            seyfert = False
             for key in inputs_folder:
                 inputs[key] = inputs_folder[key][()]
 
@@ -1191,6 +1156,8 @@ class SimInfo:
                 logparabola = True
             elif "E0_src" in input_keys:
                 pgamma = True
+            elif "eta" in input_keys:
+                seyfert = True
             else:
                 powerlaw = True
 
@@ -1203,13 +1170,18 @@ class SimInfo:
         truths = {}
 
         if ps:
-            truths["L"] = inputs["L"]
+            try:
+                truths["L"] = inputs["L"]
+            except KeyError:
+                truths["P"] = inputs["P"]
             if powerlaw or logparabola:
                 truths["src_index"] = inputs["src_index"]
             if logparabola:
                 truths["beta_index"] = inputs["beta_index"]
             if pgamma or logparabola:
                 truths["E0_src"] = inputs["E0_src"]
+            if seyfert:
+                truths["eta"] = inputs["eta"]
 
         if diff:
             truths["F_diff"] = inputs["F_diff"]
@@ -1246,8 +1218,18 @@ class SimInfo:
         bg = cls.from_file(background)
         ps = cls.from_file(point_source)
 
-        bg_events = Events.from_file(background)
-        ps_events = Events.from_file(point_source)
+        bg_events = Events.from_file(
+            background,
+            apply_Emin_det=False,
+            apply_spatial_cuts=False,
+            apply_temporal_cuts=False,
+        )
+        ps_events = Events.from_file(
+            point_source,
+            apply_Emin_det=False,
+            apply_spatial_cuts=False,
+            apply_temporal_cuts=False,
+        )
 
         energies = np.hstack((ps_events.energies, bg_events.energies))
         coords = cat((ps_events.coords, bg_events.coords))
@@ -1260,7 +1242,7 @@ class SimInfo:
         events = Events(energies, coords, types, ang_errs, mjd)
 
         # Truths keys
-        ps_keys = ["L", "src_index", "beta_index", "E0_src"]
+        ps_keys = ["L", "src_index", "beta_index", "E0_src", "eta", "pressure_ratio"]
         bg_keys = ["F_atmo", "F_diff", "diff_index"]
 
         truths = {}
@@ -1341,7 +1323,6 @@ def _get_expected_Nnu_(
     """
     Helper function for calculating expected Nnu
     using stan sim_inputs.
-    TODO: include in sim class, it is not used anywhere else for that matter
     """
 
     n_params = 0
@@ -1354,7 +1335,10 @@ def _get_expected_Nnu_(
             src_index = sim_inputs["src_index"]
         elif spectrum == "pgamma":
             E0_src = sim_inputs["E0_src"]
+            # use len(D) for number of point sources
             src_index = [0.0] * len(sim_inputs["D"])
+        elif spectrum == "seyfert":
+            eta = sim_inputs["eta"]
 
         if "index" in fit_params:
             src_index_grid = sim_inputs["src_index_grid"]
@@ -1374,6 +1358,11 @@ def _get_expected_Nnu_(
             fit_Enorm = True
         else:
             fit_Enorm = False
+        if "eta" in fit_params:
+            n_params += 1
+            fit_eta = True
+        else:
+            fit_eta = False
     if diffuse:
         diff_index = sim_inputs["diff_index"]
         diff_index_grid = sim_inputs["diff_index_grid"]
@@ -1408,8 +1397,8 @@ def _get_expected_Nnu_(
                 interp = RegularGridInterpolator(
                     (first_grid, second_grid), integral_grid_2d[i]
                 )
-                E0 = sim_inputs["E0_src"][i]
-                beta = sim_inputs["beta_index"][i]
+                # E0 = sim_inputs["E0_src"][i]
+                # beta = sim_inputs["beta_index"][i]
                 eps.append(np.exp(interp(np.array([first_param, second_param])))[0])
             elif fit_index:
                 grid = sim_inputs["src_index_grid"]
@@ -1420,41 +1409,37 @@ def _get_expected_Nnu_(
             elif fit_Enorm:
                 grid = np.log(sim_inputs["E0_src_grid"])
                 param = np.log(E0_src[i])
+            elif fit_eta:
+                grid = sim_inputs["eta_grid"]
+                param = eta[i]
 
+            # Create dummy values for all other parameters
             if spectrum == "logparabola":
-                E0 = E0_src[i]
-                beta = beta_index[i]
+                kwargs = {
+                    "alpha": src_index[i],
+                    "e_0": E0_src[i],
+                    "beta": beta_index[i],
+                }
             elif spectrum == "pgamma":
-                E0 = E0_src[i]
-                beta = 0
+                kwargs = {"e_0": E0_src[i]}
+            elif spectrum == "seyfert":
+                kwargs = {"eta": eta[i]}
             else:
-                E0 = 0
-                beta = 0
+                kwargs = {"alpha": src_index[i]}
             if n_params == 1:
                 eps.append(np.exp(np.interp(param, grid, integral_grid[i])))
 
             l = sim_inputs["L"][i]
 
-            if np.isnan(l):
-                flux = sources.point_source[i].flux_model.total_flux_density.to_value(
-                    u.GeV / u.s / u.m**2
-                )
-                flux = flux * flux_conv_(
-                    alpha=src_index[i],
-                    e_low=Emin_src,
-                    e_up=Emax_src,
-                    beta=beta,
-                    e_0=E0,
+            kwargs["e_low"] = Emin_src
+            kwargs["e_up"] = Emax_src
+            if np.isnan(l) or spectrum == "seyfert":
+                flux = sources.point_source[i].flux_model.total_flux_int.to_value(
+                    1 / u.s / u.m**2
                 )
             else:
                 flux = l / (4 * np.pi * np.power(d * 3.086e22, 2))
-                flux = flux * flux_conv_(
-                    alpha=src_index[i],
-                    e_low=Emin_src,
-                    e_up=Emax_src,
-                    beta=beta,
-                    e_0=E0,
-                )
+                flux = flux * flux_conv_(**kwargs)
             F.append(flux)
 
     if diffuse:

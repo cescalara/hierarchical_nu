@@ -5,6 +5,7 @@ import numpy as np
 import numpy.typing as npt
 from collections.abc import Callable
 from typing import Union
+from pathlib import Path
 
 from .flux_model import (
     PointSourceFluxModel,
@@ -15,10 +16,11 @@ from .flux_model import (
     PGammaSpectrum,
 )
 from .atmospheric_flux import AtmosphericNuMuFlux
+from .seyfert_model import SeyfertNuMuSpectrum
 from .cosmology import luminosity_distance
 from .parameter import Parameter, ParScale
 from ..utils.config import HierarchicalNuConfig
-from ..backend.stan_generator import UserDefinedFunction
+from ..detector.r2021_bg_llh import R2021BackgroundLLH
 
 import logging
 
@@ -144,6 +146,7 @@ class PointSource(Source):
         redshift: float
         spectral_shape:
             Spectral shape of the source. Should return units 1/(GeV cm^2 s)
+        frame: Instance of `ReferenceFrame` in which energies are defined
     """
 
     @u.quantity_input
@@ -473,6 +476,97 @@ class PointSource(Source):
         norm.value = norm.value.to(1 / (u.GeV * u.m**2 * u.s))
         norm.fixed = True
         return cls(name, dec, ra, redshift, spectral_shape, frame)
+
+    @classmethod
+    def make_seyfert_source(
+        cls,
+        name: str,
+        dec: u.rad,
+        ra: u.rad,
+        logLx: float,
+        P: Parameter,
+        eta: Parameter,
+        redshift: float,
+        energy_points: int = 80,
+        eta_points: int = 100,
+    ):
+        """
+        Create source with Seyfert II neutrino flux.
+        Assumes default energy range of 1e2GeV to 1e7GeV in the detector frame.
+        Parameters:
+            name: str
+                Source name
+            dec: u.rad,
+                Declination of the source
+            ra: u.rad,
+                Right Ascension of the source
+            logLx: float
+                x-ray luminosity of source in log10(L_x / (erg / s)),
+                rounds to nearest .01
+            P: Parameter,
+                Cosmic ray pressure to thermal pressure ratio, acts as normalisation
+            eta: Parameter
+                Inverse magnetic turbulence strength
+            redshift: float
+            energy_points: int
+                Number of grid points for energy interpolation in stan
+            eta_points: int
+                Number of grid points for eta interpolation in stan
+        """
+
+        spectral_shape = SeyfertNuMuSpectrum(
+            logLx, P, eta, redshift, energy_points, eta_points, name
+        )
+        return cls(
+            name,
+            dec,
+            ra,
+            redshift,
+            spectral_shape,
+            DetectorFrame,
+        )
+
+    @classmethod
+    def make_seyfert_sources_from_file(
+        cls, file_name: Union[Path, str], shared_P: bool, shared_eta: bool
+    ):
+        with h5py.File(file_name, "r") as f:
+            # Subject to change, what do we need here
+            ras = f["phi"][()] * u.rad
+            selection = f["selection"][()]  # TODO properly implement or leave out?
+            decs = -(f["theta"][()] - np.pi / 2) * u.rad
+            distances = f["distances"][()]  # redshift, for luminosity distance
+            logLx = f["luminosities"][()]  # x-ray luminosity, properly implement
+            pressure_ratios = f["pressure_ratio"][()]  # only important for simulations
+            etas = f["eta"][()]  # same
+
+        if shared_eta:
+            eta = Parameter(40, "eta", fixed=False, par_range=(2, 150))
+        if shared_P:
+            P = Parameter(0.2, "pressure_ratio", fixed=True, par_range=(0.0, 0.5))
+
+        source_list = []
+        for c, (r, d, z, lLx) in enumerate(zip(ras, decs, distances, logLx)):
+            if not shared_eta:
+                eta = Parameter(etas[c], f"ps_{c}_eta", fixed=False, par_range=(2, 150))
+            if not shared_P:
+                P = Parameter(
+                    pressure_ratios[c],
+                    f"ps_{c}_pressure_ratio",
+                    fixed=True,
+                    par_range=(0, 0.5),
+                )
+            ps = PointSource.make_seyfert_source(
+                f"ps_{c}",
+                d,
+                r,
+                lLx,
+                P,
+                eta,
+                z,
+            )
+            source_list.append(ps)
+        return source_list
 
     @classmethod
     def _make_sources_from_file(
@@ -1018,7 +1112,6 @@ class Sources:
 
     def remove(self, i):
         self._sources.pop(i)
-        self.N -= 1
 
     def total_flux_int(self):
         tot = 0
@@ -1193,6 +1286,18 @@ class Sources:
 
     def __bool__(self):
         return bool(len(self))
+
+    def make_seyfert_functions(self):
+        lpdf = []
+        flux_tab = []
+        flux_conv = []
+        for s in self.point_source:
+            ret = s._flux_model.spectral_shape.make_stan_functions()
+            lpdf.append(ret[0])
+            flux_tab.append(ret[1])
+            flux_conv.append(ret[2])
+
+        return lpdf, flux_tab, flux_conv
 
 
 def uv_to_icrs(unit_vector):

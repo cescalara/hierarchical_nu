@@ -127,16 +127,11 @@ class StanFitInterface(StanInterface):
         self._debug = debug
         self._bg = bg
 
-        try:
-            Nex_src = Parameter.get_parameter("Nex_src")
-            self._fit_nex = True
-        except ValueError:
-            self._fit_nex = False
-
         n_params = 0
         n_params += 1 if self._fit_index else 0
         n_params += 1 if self._fit_beta else 0
         n_params += 1 if self._fit_Enorm else 0
+        n_params += 1 if self._fit_eta else 0
 
         self._n_params = n_params
 
@@ -385,6 +380,35 @@ class StanFitInterface(StanInterface):
                                     ),
                                 ]
                             )
+                        elif self._seyfert:
+                            if len(self.sources.point_source) == 1:
+                                StringExpression(
+                                    [
+                                        _lp,
+                                        " += ",
+                                        self._src_spectrum_lpdf[0](
+                                            self._E[i],
+                                            self._eta[k],
+                                        ),
+                                    ]
+                                )
+                            else:
+                                for j in range(1, len(self.sources.point_source) + 1):
+                                    if j == 1:
+                                        context = IfBlockContext
+                                    else:
+                                        context = ElseIfBlockContext
+                                    with context([k, " == ", j]):
+                                        StringExpression(
+                                            [
+                                                _lp,
+                                                " += ",
+                                                self._src_spectrum_lpdf[j - 1](
+                                                    self._E[i],
+                                                    self._eta[k],
+                                                ),
+                                            ]
+                                        )
                         else:
                             StringExpression(
                                 [
@@ -518,11 +542,13 @@ class StanFitInterface(StanInterface):
                                 ),
                             ]
                         )
+            """
             if hasattr(self, "_log_lik"):
                 # If self._log_lik exists, fill it with data
                 self._log_lik[i] << FunctionCall(
                     [self._lp[i]], "log_sum_exp"
                 ) - FunctionCall([self._Nex], "log")
+            """
 
     def _functions(self):
         """
@@ -548,19 +574,24 @@ class StanFitInterface(StanInterface):
                     self._ps_spectrum.make_stan_utility_func(
                         self._fit_index, self._fit_beta, self._fit_Enorm
                     )
-                self._src_spectrum_lpdf = self._ps_spectrum.make_stan_lpdf_func(
-                    "src_spectrum_logpdf",
-                    self._fit_index,
-                    self._fit_beta,
-                    self._fit_Enorm,
-                )
+                if self._seyfert:
+                    self._src_spectrum_lpdf, self._src_flux_table, self._flux_conv = (
+                        self._sources.make_seyfert_functions()
+                    )
+                else:
+                    self._src_spectrum_lpdf = self._ps_spectrum.make_stan_lpdf_func(
+                        "src_spectrum_logpdf",
+                        self._fit_index,
+                        self._fit_beta,
+                        self._fit_Enorm,
+                    )
 
-                self._flux_conv = self._ps_spectrum.make_stan_flux_conv_func(
-                    "flux_conv",
-                    self._fit_index,
-                    self._fit_beta,
-                    self._fit_Enorm,
-                )
+                    self._flux_conv = self._ps_spectrum.make_stan_flux_conv_func(
+                        "flux_conv",
+                        self._fit_index,
+                        self._fit_beta,
+                        self._fit_Enorm,
+                    )
 
             # If we have diffuse sources, include the shape of their PDF
             if self.sources.diffuse:
@@ -572,7 +603,7 @@ class StanFitInterface(StanInterface):
                 )
 
             # If we have atmospheric sources, include the atmospheric flux table
-            # the density of the grid in theta (ie. declination) is specified here
+            # the density of the grid in theta (i.e. declination) is specified here
             if self.sources.atmospheric:
                 # Increasing theta points too much makes compilation very slow
                 # Could switch to passing array as data if problematic
@@ -646,6 +677,12 @@ class StanFitInterface(StanInterface):
                         self._E0_src = ForwardVariableDef("E0_src", "vector[Ns]")
                         self._E0_src << glob[start:end]
                         start << start + self._Ns
+                    if self._fit_eta:
+                        end << end + self._Ns
+                        self._eta = ForwardVariableDef("eta", "vector[Ns]")
+                        self._eta << glob[start:end]
+                        start << start + self._Ns
+
                     # Get diffuse index
                     if self.sources.diffuse:
                         end << end + 1
@@ -664,10 +701,12 @@ class StanFitInterface(StanInterface):
                         "logF", "vector[" + self._Ns_tot_flux + "]"
                     )
                     self._logF << glob[start:end]
+                    start << start + self._Ns_tot_flux
                     if self._bg:
-                        start << start + self._Ns_tot_flux
+                        end << end + 1
                         self._log_N_bg = ForwardVariableDef("log_N_bg", "real")
                         self._log_N_bg << glob[start]
+                        start << start + 1
 
                     # Local pars are only neutrino energies
                     self._E = ForwardVariableDef("E", "vector[N]")
@@ -835,7 +874,7 @@ class StanFitInterface(StanInterface):
                     start << start + 1
 
                     data_idx = 1
-                    if not self._pgamma and not self._fit_index:
+                    if (self._power_law or self._logparabola) and not self._fit_index:
                         end << end + self._Ns
                         self._src_index = ForwardArrayDef("src_index", "real", ["[Ns]"])
                         self._src_index << real_data[start:end]
@@ -996,8 +1035,12 @@ class StanFitInterface(StanInterface):
             self._Emin = ForwardVariableDef("Emin", "real")
             self._Emax = ForwardVariableDef("Emax", "real")
             if self.sources.point_source:
-                self._Lmin = ForwardVariableDef("Lmin", "real")
-                self._Lmax = ForwardVariableDef("Lmax", "real")
+                if not self._seyfert:
+                    self._Lmin = ForwardVariableDef("Lmin", "real")
+                    self._Lmax = ForwardVariableDef("Lmax", "real")
+                if self._seyfert:
+                    self._Pmin = ForwardVariableDef("P_min", "real")
+                    self._Pmax = ForwardVariableDef("P_max", "real")
                 if self._fit_index:
                     self._src_index_min = ForwardVariableDef("src_index_min", "real")
                     self._src_index_max = ForwardVariableDef("src_index_max", "real")
@@ -1067,6 +1110,11 @@ class StanFitInterface(StanInterface):
                         )
                     else:
                         self._E0_src_grid = 0
+                    if self._fit_eta:
+                        self._eta_min = ForwardVariableDef("eta_min", "real")
+                        self._eta_max = ForwardVariableDef("eta_max", "real")
+                        self._eta_grid = ForwardVariableDef("eta_grid", "vector[Ngrid]")
+
                     if self._n_params == 2:
                         self._integral_grid_2d = ForwardArrayDef(
                             "integral_grid_2d",
@@ -1106,7 +1154,9 @@ class StanFitInterface(StanInterface):
 
             if self._sources.point_source:
                 # Define variables for the prior mu/sigma
-                if (
+                if self._priors.src_index.name == "notaprior":
+                    pass
+                elif (
                     isinstance(self._priors.src_index, MultiSourcePrior)
                     and self._fit_index
                 ):
@@ -1140,8 +1190,20 @@ class StanFitInterface(StanInterface):
                     E0_src_mu_def = ForwardVariableDef("E0_src_mu", "real")
                     E0_src_sigma_def = ForwardVariableDef("E0_src_sigma", "real")
 
+                if self._priors.eta.name == "notaprior":
+                    pass
+                elif isinstance(self._priors.eta, MultiSourcePrior) and self._fit_eta:
+                    eta_mu_def = ForwardArrayDef("eta_mu", "real", self._Ns_str)
+                    eta_sigma_def = ForwardArrayDef("eta_sigma", "real", self._Ns_str)
+                elif self._fit_eta:
+                    eta_mu_def = ForwardVariableDef("eta_mu", "real")
+                    eta_sigma_def = ForwardVariableDef("eta_sigma", "real")
+
                 # Store prior data definitions
-                if self._fit_index:
+                if self._fit_index and self._priors.src_index.name in [
+                    "normal",
+                    "lognormal",
+                ]:
                     self._stan_prior_src_index_mu = index_mu_def
                     self._stan_prior_src_index_sigma = index_sigma_def
                 if self._fit_beta:
@@ -1150,8 +1212,15 @@ class StanFitInterface(StanInterface):
                 if self._fit_Enorm:
                     self._stan_prior_E0_src_mu = E0_src_mu_def
                     self._stan_prior_E0_src_sigma = E0_src_sigma_def
+                if self._fit_eta and self._priors.eta.name != "notaprior":
+                    self._stan_prior_eta_mu = eta_mu_def
+                    self._stan_prior_eta_sigma = eta_sigma_def
                 # check for luminosity, if they all have the same prior
-                if self._priors.luminosity.name in ["normal", "lognormal"]:
+                if self._fit_nex or self._seyfert:
+                    if self._priors.Nex_src.name != "notaprior":
+                        self._stan_prior_nex_mu = ForwardVariableDef("Nex_mu", "real")
+                        self._stan_prior_nex_sigma = ForwardVariableDef("Nex_sigma", "real")
+                elif self._priors.luminosity.name in ["normal", "lognormal"]:
                     if isinstance(self._priors.luminosity, MultiSourcePrior):
                         mu_def = ForwardArrayDef("lumi_mu", "real", self._Ns_str)
                         sigma_def = ForwardArrayDef("lumi_sigma", "real", self._Ns_str)
@@ -1170,6 +1239,21 @@ class StanFitInterface(StanInterface):
 
                     self._stan_prior_lumi_xmin = xmin_def
                     self._stan_prior_lumi_alpha = alpha_def
+
+                if self._fit_nex:
+                    pass
+                elif self._seyfert:
+                    if self._priors.pressure_ratio.name == "notaprior":
+                        pass
+                    elif isinstance(self._priors.pressure_ratio, MultiSourcePrior):
+                        mu_def = ForwardArrayDef("P_mu", "real", self._Ns_str)
+                        sigma_def = ForwardArrayDef("P_sigma", "real", self._Ns_str)
+                    else:
+                        mu_def = ForwardVariableDef("P_mu", "real")
+                        sigma_def = ForwardVariableDef("P_sigma", "real")
+                    if self._priors.pressure_ratio.name != "notaprior":
+                        self._stan_prior_pressure_ratio_mu = mu_def
+                        self._stan_prior_pressure_ratio_sigma = sigma_def
 
             if self._sources.diffuse:
                 self._stan_prior_f_diff_mu = ForwardVariableDef("f_diff_mu", "real")
@@ -1328,7 +1412,7 @@ class StanFitInterface(StanInterface):
                 # Find size for real_data array
                 sd_events_J = (
                     4 + grid_size
-                )  # reco energy, reco dir (unit vector), eres grid
+                )  # reco energy, reco dir (unit vector, counts as 3 entries), eres grid
                 if self._bg:
                     sd_events_J += 1  # one bg llh entry per event
                 sd_if_diff = 3  # redshift of diffuse component, Emin_diff/max
@@ -1570,7 +1654,23 @@ class StanFitInterface(StanInterface):
                         self._Nex_src_max,
                     )
 
-                if not self._fit_nex:
+                elif self._seyfert:
+                    # TODO make vector option for multi ps with individual parameters,
+                    # hijack shared luminosity for this
+                    if self._shared_luminosity:
+                        self._P_glob = ParameterDef(
+                            "pressure_ratio", "real", self._Pmin, self._Pmax
+                        )
+                    else:
+                        self._P = ParameterVectorDef(
+                            "pressure_ratio",
+                            "vector",
+                            self._Ns_str,
+                            self._Pmin,
+                            self._Pmax,
+                        )
+
+                else:
                     if self._shared_luminosity:
                         self._L_glob = ParameterDef("L", "real", self._Lmin, self._Lmax)
                     else:
@@ -1604,6 +1704,13 @@ class StanFitInterface(StanInterface):
                             self._E0_src_min,
                             self._E0_src_max,
                         )
+                    if self._fit_eta:
+                        self._eta_glob = ParameterDef(
+                            "eta",
+                            "real",
+                            self._eta_min,
+                            self._eta_max,
+                        )
 
                 else:
                     if self._fit_index:
@@ -1629,6 +1736,10 @@ class StanFitInterface(StanInterface):
                             self._Ns_str,
                             self._E0_src_min,
                             self._E0_src_max,
+                        )
+                    if self._fit_eta:
+                        self._eta = ParameterVectorDef(
+                            "eta", "vector", self._Ns_str, self._eta_min, self._eta_max
                         )
 
             # Specify F_diff and diff_index to characterise the diffuse comp
@@ -1682,7 +1793,7 @@ class StanFitInterface(StanInterface):
                     "Nex_atmo_comp", "real", ["[", self._Net, "]"]
                 )
             if self.sources.point_source:
-                if self._shared_luminosity or self._fit_nex:
+                if self._shared_luminosity or self._fit_nex or self._seyfert:
                     self._L = ForwardVariableDef(
                         "L_ind",
                         "vector[Ns]",
@@ -1696,12 +1807,28 @@ class StanFitInterface(StanInterface):
                         self._beta_index = ForwardVariableDef(
                             "beta_index_ind", "vector[Ns]"
                         )
+                    if self._fit_eta:
+                        self._eta = ForwardVariableDef("eta_ind", "vector[Ns]")
+                if self._fit_nex and self._seyfert:
+                    self._P = ForwardVariableDef("pressure_ratio", "vector[Ns]")
+                elif self._shared_luminosity and self._seyfert:
+                    self._P = ForwardVariableDef("pressure_ratio_ind", "vector[Ns]")
                 if self._fit_Enorm:
                     self._E0_src = ForwardVariableDef("E0_src_ind", "vector[Ns]")
                 if self._shared_luminosity or self._shared_src_index:
                     with ForLoopContext(1, self._Ns, "k") as k:
-                        if self._shared_luminosity and not self._fit_nex:
+                        if (
+                            self._shared_luminosity
+                            and not self._fit_nex
+                            and not self._seyfert
+                        ):
                             self._L[k] << self._L_glob
+                        if (
+                            self._shared_luminosity
+                            and self._seyfert
+                            and not self._fit_nex
+                        ):
+                            self._P[k] << self._P_glob
                         if self._shared_src_index and self._fit_index:
                             self._src_index[k] << self._src_index_glob
                         if self._shared_src_index and self._fit_beta:
@@ -1711,6 +1838,8 @@ class StanFitInterface(StanInterface):
                             # meaning that E0_src_glob is defined in the source frame
                             # and E0_src[k] is redshifted using z[k]
                             self._E0_src[k] << self._E0_src_glob / (1 + self._z[k])
+                        if self._shared_src_index and self._fit_eta:
+                            self._eta[k] << self._eta_glob
                 if self._fit_ang_sys:
                     self._ang_sys_add_squared = ForwardVariableDef(
                         "ang_sys_add_squared", "real"
@@ -1833,18 +1962,21 @@ class StanFitInterface(StanInterface):
                     python_counter += 1
                 if self._fit_Enorm:
                     python_counter += 1
+                if self._fit_eta:
+                    python_counter += 1
                 # always use individual, transformed parameters, even if shared_src_index
                 num_of_pars += f" + Ns * {python_counter:d}"
 
+                par_counter = 0
                 if self.sources.diffuse:
-                    num_of_pars += " + 2"
+                    par_counter += 2
                 if self.sources.atmospheric:
-                    num_of_pars += " + 1"
+                    par_counter += 1
                 if self.sources.background:
-                    num_of_pars += " + 1"
-
+                    par_counter += 1
                 if self._fit_ang_sys:
-                    num_of_pars += " + 1"
+                    par_counter += 1
+                num_of_pars += f" + {par_counter:d}"
 
                 self._global_pars = ForwardVariableDef(
                     "global_pars", f"vector[{num_of_pars}]"
@@ -1912,7 +2044,7 @@ class StanFitInterface(StanInterface):
             if self.sources.point_source:
                 with ForLoopContext(1, self._Ns, "k") as k:
 
-                    if not self._fit_nex:
+                    if not self._fit_nex and not self._seyfert:
                         self._F[k] << StringExpression(
                             [
                                 self._L[k],
@@ -1923,6 +2055,22 @@ class StanFitInterface(StanInterface):
                                 ", 2))",
                             ]
                         )
+                    elif not self._fit_nex:
+                        # Use pressure_ratio * integrated flux (latter is normalised to the pressure ratio used in sims)
+                        if len(self.sources.point_source) == 1:
+                            self._F[k] << self._P[k] * self._src_flux_table[0](
+                                self._eta[k]
+                            )
+                        else:
+                            for j in range(1, len(self.sources.point_source) + 1):
+                                if j == 1:
+                                    context = IfBlockContext
+                                else:
+                                    context == ElseIfBlockContext
+                                with context([k, " == ", j]):
+                                    self._F[k] << self._P[k] * self._src_flux_table[
+                                        j - 1
+                                    ](self._eta[k])
 
                     if self._logparabola or self._pgamma:
                         # create even more references
@@ -1983,13 +2131,28 @@ class StanFitInterface(StanInterface):
                             x_i,
                         )
 
+                    elif self._seyfert:
+                        if len(self.sources.point_source) == 1:
+                            self._flux_conv_val[k] << self._flux_conv[0](
+                                self._eta[k],
+                            )
+                        else:
+                            for j in range(1, len(self.sources.point_source) + 1):
+                                if j == 1:
+                                    context = IfBlockContext
+                                else:
+                                    context = ElseIfBlockContext
+                                with context([k, " == ", j]):
+                                    self._flux_conv_val[k] << self._flux_conv[j - 1](
+                                        self._eta[k]
+                                    )
                     else:
                         self._flux_conv_val[k] << self._flux_conv(
                             self._src_index[k],
                             self._Emin_src[k],
                             self._Emax_src[k],
                         )
-                    if not self._fit_nex:
+                    if not self._fit_nex and not self._seyfert:
                         StringExpression([self._F[k], "*=", self._flux_conv_val[k]])
 
                     with ForLoopContext(1, self._Net_stan, "i") as i:
@@ -2026,6 +2189,13 @@ class StanFitInterface(StanInterface):
                                 self._E0_src[k],
                             ]
                             method = "interpolate_log_y"
+                        elif self._fit_eta:
+                            args = [
+                                self._eta_grid,
+                                self._integral_grid[i, k],
+                                self._eta[k],
+                            ]
+                            method = "interpolate_log_y"
 
                         (
                             self._eps[i, k]
@@ -2054,6 +2224,7 @@ class StanFitInterface(StanInterface):
                             ]
                         )
                         # self._Nex_per_ps[k] / FunctionCall([self._eps[:, k]], "sum")
+                    if self._fit_nex or self._seyfert:
                         self._L[k] << self._F[k] / self._flux_conv_val[
                             k
                         ] * StringExpression(
@@ -2065,15 +2236,34 @@ class StanFitInterface(StanInterface):
                                 ", 2))",
                             ]
                         )
-
-                        with ForLoopContext(1, self._Net_stan, "i") as i:
-                            StringExpression(
-                                [
-                                    self._Nex_src_comp[i],
-                                    "+=",
-                                    self._F[k] * self._eps[i, k],
-                                ]
+                    if self._seyfert and self._fit_nex:
+                        # Nex = P * F_tab(eta, divided by accomp. P) * eps, so F = P * F_tab(eta),
+                        # Nex = F * eps
+                        # F = F(eta) * P = Nex / eps
+                        # P = F / F(eta)
+                        if len(self.sources.point_source) == 1:
+                            self._P[k] << self._F[k] / self._src_flux_table[0](
+                                self._eta[k]
                             )
+                        else:
+                            for j in range(1, len(self.sources.point_source) + 1):
+                                if j == 1:
+                                    context = IfBlockContext
+                                else:
+                                    context = ElseIfBlockContext
+                                with context([k, " == ", j]):
+                                    self._P[k] << self._F[k] / self._src_flux_table[
+                                        j - 1
+                                    ](self._eta[k])
+
+                    with ForLoopContext(1, self._Net_stan, "i") as i:
+                        StringExpression(
+                            [
+                                self._Nex_src_comp[i],
+                                "+=",
+                                self._F[k] * self._eps[i, k],
+                            ]
+                        )
                     if not self._fit_nex:
                         StringExpression(
                             [
@@ -2228,6 +2418,10 @@ class StanFitInterface(StanInterface):
                         end << end + self._Ns
                         self._global_pars[start:end] << self._E0_src
                         start << start + self._Ns
+                    if self._fit_eta:
+                        end << end + self._Ns
+                        self._global_pars[start:end] << self._eta
+                        start << start + self._Ns
                     if self.sources.diffuse:
                         end << end + 1
                         self._global_pars[start] << self._diff_index
@@ -2271,7 +2465,79 @@ class StanFitInterface(StanInterface):
 
             # Priors
             if self.sources.point_source:
-                if self._priors.luminosity.name in ["normal", "lognormal"]:
+
+                if self._fit_nex and not self._priors.Nex_src.name == "notaprior":
+                    StringExpression(
+                        [
+                            self._Nex_src,
+                            " ~ ",
+                            FunctionCall(
+                                [
+                                    self._stan_prior_nex_mu,
+                                    self._stan_prior_nex_sigma,
+                                ],
+                                self._priors.Nex_src.name
+                            )
+                        ]
+                    )    
+                elif self._priors.pressure_ratio.name == "notaprior":
+                    pass
+                elif self._shared_luminosity and self._seyfert:
+                    # use global prior for pressure ratio
+                    StringExpression(
+                        [
+                            self._P_glob,
+                            " ~ ",
+                            FunctionCall(
+                                [
+                                    self._stan_prior_pressure_ratio_mu,
+                                    self._stan_prior_pressure_ratio_sigma,
+                                ],
+                                self._priors.pressure_ratio.name,
+                            ),
+                        ]
+                    )
+                elif self._seyfert and isinstance(
+                    self._priors.pressure_ratio, MultiSourcePrior
+                ):
+                    with ForLoopContext(1, self._Ns, "i") as i:
+                        StringExpression(
+                            [
+                                self._P[i],
+                                " ~ ",
+                                FunctionCall(
+                                    [
+                                        self._stan_prior_pressure_ratio_mu[i],
+                                        self._stan_prior_pressure_ratio_sigma[i],
+                                    ],
+                                    self._priors.pressure_ratio.name,
+                                ),
+                            ]
+                        )
+
+                else:
+                    with ForLoopContext(1, self._Ns, "i") as i:
+                        StringExpression(
+                            [
+                                self._P[i],
+                                " ~ ",
+                                FunctionCall(
+                                    [
+                                        self._stan_prior_pressure_ratio_mu,
+                                        self._stan_prior_pressure_ratio_sigma,
+                                    ],
+                                    self._priors.pressure_ratio.name,
+                                ),
+                            ]
+                        )
+                if (
+                    self._priors.luminosity.name == "notaprior"
+                    or self._seyfert
+                    or self._fit_nex
+                ):
+                    pass
+
+                elif self._priors.luminosity.name in ["normal", "lognormal"]:
                     if self._shared_luminosity and not self._fit_nex:
                         StringExpression(
                             [
@@ -2286,10 +2552,7 @@ class StanFitInterface(StanInterface):
                                 ),
                             ]
                         )
-                    elif (
-                        isinstance(self._priors.luminosity, MultiSourcePrior)
-                        and not self._fit_nex
-                    ):
+                    elif isinstance(self._priors.luminosity, MultiSourcePrior):
                         with ForLoopContext(1, self._Ns, "i") as i:
                             StringExpression(
                                 [
@@ -2353,15 +2616,22 @@ class StanFitInterface(StanInterface):
                                     ),
                                 ]
                             )
-
                 else:
                     raise NotImplementedError(
                         "Luminosity prior distribution not recognised."
                     )
 
-                if self._priors.src_index.name not in ["normal", "lognormal"]:
+                # TODO add pressure ratio prior here
+
+                if self._priors.src_index.name not in [
+                    "normal",
+                    "lognormal",
+                    "notaprior",
+                ]:
                     raise ValueError("Prior type for source index not recognised.")
-                if (
+                if self._priors.src_index.name == "notaprior":
+                    pass
+                elif (
                     isinstance(self._priors.src_index, MultiSourcePrior)
                     and self._fit_index
                 ):
@@ -2505,6 +2775,34 @@ class StanFitInterface(StanInterface):
                             ]
                         )
 
+            if self._priors.eta.name == "notaprior":
+                pass
+            elif self._priors.eta.name not in ["normal", "lognormal"]:
+                raise ValueError("Prior type not recognised for eta")
+            elif self._fit_eta and isinstance(self._priors.eta, MultiSourcePrior):
+                with ForLoopContext(1, self._Ns, "i") as i:
+                    StringExpression(
+                        [
+                            self._eta[i],
+                            " ~ ",
+                            FunctionCall(
+                                [self._stan_prior_eta_mu, self._stan_prior_eta_sigma],
+                                self._priors.eta.name,
+                            ),
+                        ]
+                    )
+            elif self._fit_eta:
+                StringExpression(
+                    [
+                        self._eta_glob,
+                        " ~ ",
+                        FunctionCall(
+                            [self._stan_prior_eta_mu, self._stan_prior_eta_sigma],
+                            self._priors.eta.name,
+                        ),
+                    ]
+                )
+
             if self.sources.diffuse:
                 if self._priors.diffuse_flux.name not in ["normal", "lognormal"]:
                     raise NotImplementedError(
@@ -2600,7 +2898,6 @@ class StanFitInterface(StanInterface):
         """
 
         with GeneratedQuantitiesContext():
-
             # Remove _log_lik? was only used for some niche testing
             # self._log_lik = ForwardArrayDef("log_lik", "real", ["[N]"])
             if self._pgamma:
