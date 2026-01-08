@@ -516,7 +516,7 @@ class Events:
         ang_err = np.hstack([events.ang_err[s.P] * u.deg for s in seasons])
         coords = SkyCoord(ra=ra, dec=dec, frame="icrs")
 
-        if apply_temporal_cuts or apply_temporal_cuts:
+        if apply_spatial_cuts or apply_temporal_cuts:
             mask = cls.apply_ROIS(
                 coords,
                 mjd,
