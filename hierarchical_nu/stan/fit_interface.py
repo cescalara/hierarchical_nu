@@ -719,6 +719,8 @@ class StanFitInterface(StanInterface):
                             size += 1
                         if self._sources.atmospheric:
                             size += 1
+                        if self._sources.background:
+                            size += 1
                         # reduce lp to 3 components per event since we only allow for one PS association
                         self._lp = ForwardArrayDef(
                             "lp", "vector[" + str(size) + "]", ["[N]"]
@@ -1219,7 +1221,9 @@ class StanFitInterface(StanInterface):
                 if self._fit_nex or self._seyfert:
                     if self._priors.Nex_src.name != "notaprior":
                         self._stan_prior_nex_mu = ForwardVariableDef("Nex_mu", "real")
-                        self._stan_prior_nex_sigma = ForwardVariableDef("Nex_sigma", "real")
+                        self._stan_prior_nex_sigma = ForwardVariableDef(
+                            "Nex_sigma", "real"
+                        )
                 elif self._priors.luminosity.name in ["normal", "lognormal"]:
                     if isinstance(self._priors.luminosity, MultiSourcePrior):
                         mu_def = ForwardArrayDef("lumi_mu", "real", self._Ns_str)
@@ -2433,7 +2437,7 @@ class StanFitInterface(StanInterface):
                     end << end + StringExpression(["size(logF)"])
                     self._global_pars[start:end] << self._logF
                     if self._bg:
-                        start << start + 1
+                        start << start + StringExpression(["size(logF)"])
                         self._global_pars[start] << self._log_N_bg
                     # Likelihood is evaluated in `lp_reduce`
 
@@ -2476,10 +2480,10 @@ class StanFitInterface(StanInterface):
                                     self._stan_prior_nex_mu,
                                     self._stan_prior_nex_sigma,
                                 ],
-                                self._priors.Nex_src.name
-                            )
+                                self._priors.Nex_src.name,
+                            ),
                         ]
-                    )    
+                    )
                 elif self._priors.pressure_ratio.name == "notaprior":
                     pass
                 elif self._shared_luminosity and self._seyfert:
