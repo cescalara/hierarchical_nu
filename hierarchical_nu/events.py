@@ -161,7 +161,8 @@ class Events:
         :param mask: Array of bools with same length as event properties.
         """
 
-        assert len(mask) == self.N
+        if not len(mask) == self.N:
+            raise ValueError("Mask needs to be of the same length as N.")
 
         try:
             self._idxs[self._idxs] = np.logical_and(self._idxs[self._idxs], mask)
@@ -445,7 +446,8 @@ class Events:
         it_types = np.unique([IC40.P, IC59.P, IC79.P, IC86_I.P, IC86_II.P])
         hnu_types = np.unique([Refrigerator.stan2python(_) for _ in self._types])
         # Check that only r2021 events are present
-        assert np.in1d(hnu_types, it_types)
+        if not np.isin(hnu_types, it_types):
+            raise ValueError("Erroneous event types used.")
 
         reco_energies = dddict()
         ang_errs = dddict()
