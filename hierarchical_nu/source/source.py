@@ -2,18 +2,102 @@ from abc import ABC, abstractmethod
 import h5py
 from astropy import units as u
 import numpy as np
+import numpy.typing as npt
 from collections.abc import Callable
+from typing import Union
+from pathlib import Path
 
 from .flux_model import (
     PointSourceFluxModel,
     PowerLawSpectrum,
+    LogParabolaSpectrum,
     TwiceBrokenPowerLaw,
     IsotropicDiffuseBG,
-    integral_power_law,
+    PGammaSpectrum,
 )
 from .atmospheric_flux import AtmosphericNuMuFlux
+from .seyfert_model import SeyfertNuMuSpectrum
 from .cosmology import luminosity_distance
 from .parameter import Parameter, ParScale
+from ..utils.config import HierarchicalNuConfig
+from ..detector.r2021_bg_llh import R2021BackgroundLLH
+
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+class ReferenceFrame(ABC):
+    """
+    Abstract base class for source frames.
+    """
+
+    @staticmethod
+    def func(list, *args):
+        """
+        Method to avoid stan generator issues.
+        """
+
+        prev = args[-1]
+        try:
+            for arg in reversed(args[:-1]):
+                prev = arg[prev]
+            out = list[prev]
+        except UnboundLocalError:
+            out = list[prev]
+        return out
+
+    @classmethod
+    @abstractmethod
+    def stan_to_det(cls, E, z):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def stan_to_src(cls, E, z):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def transform(cls, z):
+        pass
+
+
+class DetectorFrame(ReferenceFrame):
+
+    name = "detector"
+
+    @classmethod
+    @u.quantity_input
+    def transform(cls, E: u.GeV, z: Union[int, float, None] = None):
+        return E
+
+    @classmethod
+    def stan_to_src(cls, E, z, *indices):
+        return E * (1 + cls.func(z, *indices))
+
+    @classmethod
+    def stan_to_det(cls, E, z, *indices):
+        return E
+
+
+class SourceFrame(ReferenceFrame):
+
+    name = "source"
+
+    @classmethod
+    @u.quantity_input
+    def transform(cls, E: u.GeV, z: Union[int, float]):
+        return E / (1.0 + z)
+
+    @classmethod
+    def stan_to_src(cls, E, z, *indices):
+        return E
+
+    @classmethod
+    def stan_to_det(cls, E, z, *indices):
+        return E / (1.0 + cls.func(z, *indices))
 
 
 class Source(ABC):
@@ -21,9 +105,10 @@ class Source(ABC):
     Abstract base class for sources.
     """
 
-    def __init__(self, name: str, *args, **kwargs):
+    def __init__(self, name: str, frame: ReferenceFrame, *args, **kwargs):
         self._name = name
-        self._parameters = []
+        self._frame = frame
+        self._parameters = {}
         self._flux_model = None
 
     @property
@@ -41,8 +126,12 @@ class Source(ABC):
     @u.quantity_input
     def flux(
         self, energy: u.GeV, dec: u.rad, ra: u.rad
-    ) -> 1 / (u.GeV * u.m**2 * u.s * u.sr):
+    ) -> u.Quantity[1 / (u.GeV * u.m**2 * u.s * u.sr)]:
         return self._flux_model(energy, dec, ra)
+
+    @property
+    def frame(self):
+        return self._frame
 
 
 class PointSource(Source):
@@ -57,6 +146,7 @@ class PointSource(Source):
         redshift: float
         spectral_shape:
             Spectral shape of the source. Should return units 1/(GeV cm^2 s)
+        frame: Instance of `ReferenceFrame` in which energies are defined
     """
 
     @u.quantity_input
@@ -67,10 +157,11 @@ class PointSource(Source):
         ra: u.rad,
         redshift: float,
         spectral_shape: Callable[[float], float],
+        frame: ReferenceFrame = SourceFrame,
         *args,
-        **kwargs
+        **kwargs,
     ):
-        super().__init__(name)
+        super().__init__(name, frame)
         self._dec = dec
         self._ra = ra
         self._redshift = redshift
@@ -95,6 +186,7 @@ class PointSource(Source):
         redshift: float,
         lower: Parameter,
         upper: Parameter,
+        frame: ReferenceFrame = SourceFrame,
     ):
         """
         Factory class for creating sources with powerlaw spectrum and given luminosity.
@@ -117,7 +209,8 @@ class PointSource(Source):
                 Lower energy bound
             upper: Parameter
                 Upper energy bound
-        All parameters are taken to be defined in the source frame.
+            frame: ReferenceFrame
+                Reference frame in which source energy is defined
         """
 
         total_flux = luminosity.value / (
@@ -135,24 +228,26 @@ class PointSource(Source):
             scale=ParScale.log,
         )
 
-        # Use Enorm if set, otherwise fix to 1e5 GeV
+        # Use Enorm if set, otherwise fix to 1e5 GeV, arbitrary in any case
         try:
             Enorm_value = Parameter.get_parameter("Enorm").value
         except ValueError:
             Enorm_value = 1e5 * u.GeV
 
-        shape = PowerLawSpectrum(
+        # Transform energies to detector frame
+        spectral_shape = PowerLawSpectrum(
             norm,
             Enorm_value,
             index,
-            lower.value / (1 + redshift),
-            upper.value / (1 + redshift),
+            frame.transform(lower.value, redshift),
+            frame.transform(upper.value, redshift),
         )
-        total_power = shape.total_flux_density
+
+        total_power = spectral_shape.total_flux_density
         norm.value *= total_flux / total_power
         norm.value = norm.value.to(1 / (u.GeV * u.m**2 * u.s))
         norm.fixed = True
-        return cls(name, dec, ra, redshift, shape, luminosity)
+        return cls(name, dec, ra, redshift, spectral_shape, frame)
 
     @classmethod
     @u.quantity_input
@@ -166,6 +261,7 @@ class PointSource(Source):
         redshift: float,
         lower: Parameter,
         upper: Parameter,
+        frame: ReferenceFrame = SourceFrame,
     ):
         """
         Factory class for creating sources with powerlaw spectrum and given luminosity.
@@ -185,13 +281,92 @@ class PointSource(Source):
                 Spectral index
             redshift: float
             lower: Parameter
-                Lower energy bound in source frame
+                Lower energy bound
             upper: Parameter
-                Upper energy bound in source frame
-        Takes additionally Emin and Emax (in the detector frame) to limit the spectral model.
-        `index` is the valid spectral index between `lower` and `upper` energ
+            frame: ReferenceFrame
+                Reference frame in which source energy is defined
+        All parameters are taken to be defined in the source frame.
         """
-        # raise NotImplementedError
+
+        total_flux = luminosity.value / (
+            4 * np.pi * luminosity_distance(redshift) ** 2
+        )  # here flux is W / m^2, lives in the detector frame
+
+        # Each source has an independent normalization, thus use the source name as identifier
+        # Normalisation to dN/(dEdtdA)
+        norm = Parameter(
+            # is defined at the detector!
+            1 / (u.GeV * u.s * u.m**2),
+            "{}_norm".format(name),
+            fixed=False,
+            par_range=(0, np.inf),
+            scale=ParScale.log,
+        )
+        try:
+            Enorm_value = Parameter.get_parameter("Enorm").value
+        except ValueError:
+            Enorm_value = 1e5 * u.GeV
+
+        # Transform energies to detector frame
+        spectral_shape = TwiceBrokenPowerLaw(
+            norm,
+            Enorm_value,
+            index,
+            frame.transform(lower.value, redshift),
+            frame.transform(upper.value, redshift),
+        )
+
+        total_power = spectral_shape.total_flux_density
+        norm.value *= total_flux / total_power
+        norm.value = norm.value.to(1 / (u.GeV * u.m**2 * u.s))
+        norm.fixed = True
+        return cls(name, dec, ra, redshift, spectral_shape, frame)
+
+    @classmethod
+    @u.quantity_input
+    def make_logparabola_source(
+        cls,
+        name: str,
+        dec: u.rad,
+        ra: u.rad,
+        luminosity: Parameter,
+        alpha: Parameter,
+        beta: Parameter,
+        redshift: float,
+        lower: Parameter,
+        upper: Parameter,
+        normalisation_energy: Parameter,
+        frame: ReferenceFrame = SourceFrame,
+    ):
+        """
+        Factory class for creating sources with powerlaw spectrum and given luminosity.
+        Luminosity and all energies given as arguments/parameters live in the source frame
+        and are converted to detector frame internally.
+
+        Parameters:
+            name: str
+                Source name
+            dec: u.rad,
+                Declination of the source
+            ra: u.rad,
+                Right Ascension of the source
+            luminosity: Parameter,
+                luminosity
+            alpha: Parameter
+                Spectral index
+            beta: Parameter
+                Curvature parameter
+            redshift: float
+            lower: Parameter
+                Lower energy bound
+            upper: Parameter
+                Upper energy bound
+            normalisation_energy: Parameter
+                Normalisation energy of spectrum
+            frame: ReferenceFrame
+                Reference frame in which source energy is defined
+        """
+
         total_flux = luminosity.value / (
             4 * np.pi * luminosity_distance(redshift) ** 2
         )  # here flux is W / m^2, lives in the detector frame
@@ -207,38 +382,208 @@ class PointSource(Source):
             scale=ParScale.log,
         )
 
-        shape = TwiceBrokenPowerLaw(
-            norm,
-            1e5 * u.GeV,
-            index,
-            lower.value / (1 + redshift),
-            upper.value / (1 + redshift),
+        fixed = normalisation_energy.fixed
+        # TODO this is really ugly, find a better solution to this
+        normalisation_energy.fixed = False
+        val = normalisation_energy.value
+        normalisation_energy.value = frame.transform(val, redshift)
+        par_min, par_max = normalisation_energy.par_range
+        par_range = (
+            frame.transform(par_min, redshift),
+            frame.transform(par_max, redshift),
         )
-        total_power = shape.total_flux_density
+        normalisation_energy.par_range = par_range
+        normalisation_energy.fixed = fixed
+        spectral_shape = LogParabolaSpectrum(
+            norm,
+            normalisation_energy,
+            alpha,
+            beta,
+            frame.transform(lower.value, redshift),
+            frame.transform(upper.value, redshift),
+        )
+
+        total_power = spectral_shape.total_flux_density
         norm.value *= total_flux / total_power
         norm.value = norm.value.to(1 / (u.GeV * u.m**2 * u.s))
         norm.fixed = True
-        return cls(name, dec, ra, redshift, shape, luminosity)
+        return cls(name, dec, ra, redshift, spectral_shape, frame)
 
     @classmethod
-    def make_powerlaw_sources_from_file(
+    @u.quantity_input
+    def make_pgamma_source(
+        cls,
+        name: str,
+        dec: u.rad,
+        ra: u.rad,
+        luminosity: Parameter,
+        redshift: float,
+        E0_src: Parameter,
+        lower: Parameter,
+        upper: Parameter,
+        frame: ReferenceFrame = SourceFrame,
+    ):
+        """
+        Factory class for creating sources with powerlaw spectrum and given luminosity.
+        Luminosity and all energies given as arguments/parameters live in the source frame
+        and are converted to detector frame internally.
+
+        Parameters:
+            name: str
+                Source name
+            dec: u.rad,
+                Declination of the source
+            ra: u.rad,
+                Right Ascension of the source
+            luminosity: Parameter,
+                luminosity
+            redshift: float
+            E0_src: Parameter
+                Energy at which flat spectrum evolves into logparabola, is defined at detector irregardless of `frame`
+                NB: Choose wide enough s.t. redshifting does not affect the result
+            lower: Parameter
+                Lower energy bound
+            upper: Parameter
+                Upper energy bound
+            frame: ReferenceFrame
+                Reference frame in which source energy is defined
+        """
+
+        total_flux = luminosity.value / (
+            4 * np.pi * luminosity_distance(redshift) ** 2
+        )  # here flux is W / m^2, lives in the detector frame
+
+        # Each source has an independent normalization, thus use the source name as identifier
+        # Normalisation to dN/(dEdtdA)
+        norm = Parameter(
+            # is defined at the detector!
+            1 / (u.GeV * u.s * u.m**2),
+            "{}_norm".format(name),
+            fixed=False,
+            par_range=(0, np.inf),
+            scale=ParScale.log,
+        )
+
+        spectral_shape = PGammaSpectrum(
+            norm,
+            E0_src,
+            frame.transform(lower.value, redshift),
+            frame.transform(upper.value, redshift),
+        )
+
+        total_power = spectral_shape.total_flux_density
+        norm.value *= total_flux / total_power
+        norm.value = norm.value.to(1 / (u.GeV * u.m**2 * u.s))
+        norm.fixed = True
+        return cls(name, dec, ra, redshift, spectral_shape, frame)
+
+    @classmethod
+    def make_seyfert_source(
+        cls,
+        name: str,
+        dec: u.rad,
+        ra: u.rad,
+        logLx: float,
+        P: Parameter,
+        eta: Parameter,
+        redshift: float,
+        energy_points: int = 80,
+        eta_points: int = 100,
+    ):
+        """
+        Create source with Seyfert II neutrino flux.
+        Assumes default energy range of 1e2GeV to 1e7GeV in the detector frame.
+        Parameters:
+            name: str
+                Source name
+            dec: u.rad,
+                Declination of the source
+            ra: u.rad,
+                Right Ascension of the source
+            logLx: float
+                x-ray luminosity of source in log10(L_x / (erg / s)),
+                rounds to nearest .01
+            P: Parameter,
+                Cosmic ray pressure to thermal pressure ratio, acts as normalisation
+            eta: Parameter
+                Inverse magnetic turbulence strength
+            redshift: float
+            energy_points: int
+                Number of grid points for energy interpolation in stan
+            eta_points: int
+                Number of grid points for eta interpolation in stan
+        """
+
+        spectral_shape = SeyfertNuMuSpectrum(
+            logLx, P, eta, redshift, energy_points, eta_points, name
+        )
+        return cls(
+            name,
+            dec,
+            ra,
+            redshift,
+            spectral_shape,
+            DetectorFrame,
+        )
+
+    @classmethod
+    def make_seyfert_sources_from_file(
+        cls, file_name: Union[Path, str], shared_P: bool, shared_eta: bool
+    ):
+        with h5py.File(file_name, "r") as f:
+            # Subject to change, what do we need here
+            ras = f["phi"][()] * u.rad
+            selection = f["selection"][()]  # TODO properly implement or leave out?
+            decs = -(f["theta"][()] - np.pi / 2) * u.rad
+            distances = f["distances"][()]  # redshift, for luminosity distance
+            logLx = f["luminosities"][()]  # x-ray luminosity, properly implement
+            pressure_ratios = f["pressure_ratio"][()]  # only important for simulations
+            etas = f["eta"][()]  # same
+
+        if shared_eta:
+            eta = Parameter(40, "eta", fixed=False, par_range=(2, 150))
+        if shared_P:
+            P = Parameter(0.2, "pressure_ratio", fixed=True, par_range=(0.0, 0.5))
+
+        source_list = []
+        for c, (r, d, z, lLx) in enumerate(zip(ras, decs, distances, logLx)):
+            if not shared_eta:
+                eta = Parameter(etas[c], f"ps_{c}_eta", fixed=False, par_range=(2, 150))
+            if not shared_P:
+                P = Parameter(
+                    pressure_ratios[c],
+                    f"ps_{c}_pressure_ratio",
+                    fixed=True,
+                    par_range=(0, 0.5),
+                )
+            ps = PointSource.make_seyfert_source(
+                f"ps_{c}",
+                d,
+                r,
+                lLx,
+                P,
+                eta,
+                z,
+            )
+            source_list.append(ps)
+        return source_list
+
+    @classmethod
+    def _make_sources_from_file(
         cls,
         file_name: str,
         lower_energy: Parameter,
         upper_energy: Parameter,
+        method: Callable,
+        frame: ReferenceFrame = SourceFrame,
         include_undetected: bool = False,
+        config: Union[None, HierarchicalNuConfig] = None,
+        normalisation_energy: Union[u.Quantity[u.GeV], None] = None,
     ):
-        """
-        Factory for power law sources defined in
-        HDF5 files ( update: output from popsynth).
-
-        :param lower_energy: Lower energy bound in definition of the luminosity.
-        :param upper_energy: Upper energy bound in definition of the luminosity.
-        :param include_undetected: Include sources that are not detected in population.
-        """
-
         # Sensible bounds on luminosity
         lumi_range = (0, 1e60) * (u.erg / u.s)
+        if config is not None:
+            lumi_range = tuple(config.parameter_config.L_range) * u.erg / u.s
 
         # Load values
         with h5py.File(file_name, "r") as f:
@@ -250,7 +595,7 @@ class PointSource(Source):
 
             ras = f["phi"][()] * u.rad
 
-            decs = (f["theta"][()] - np.pi / 2) * u.rad
+            decs = -(f["theta"][()] - np.pi / 2) * u.rad
 
             selection = f["selection"][()]
 
@@ -265,17 +610,6 @@ class PointSource(Source):
             ras = ras[selection]
 
             decs = decs[selection]
-
-        # Make cut on declination, current implementations are only defined in the Northern Sky
-        # dec > -5deg
-
-        mask = decs >= np.deg2rad(-5) * u.rad
-
-        luminosities = luminosities[mask]
-        spectral_indices = spectral_indices[mask]
-        redshifts = redshifts[mask]
-        ras = ras[mask]
-        decs = decs[mask]
 
         # Make list of point sources
         source_list = []
@@ -308,15 +642,18 @@ class PointSource(Source):
 
             # Else, create individual ps_%i_src_index parameters
             except ValueError:
+                par_range = (1, 4)
+                if config is not None:
+                    par_range = config.parameter_config.src_index_range
                 src_index = Parameter(
                     index,
                     "ps_%i_src_index" % i,
                     fixed=False,
-                    par_range=(1, 4),
+                    par_range=par_range,
                 )
 
             # Create source
-            source = PointSource.make_powerlaw_source(
+            source = method(
                 "ps_%i" % i,
                 dec,
                 ra,
@@ -325,11 +662,118 @@ class PointSource(Source):
                 z,
                 lower_energy,
                 upper_energy,
+                frame=frame,
             )
 
             source_list.append(source)
 
         return source_list
+
+    @classmethod
+    def make_powerlaw_sources_from_file(
+        cls,
+        file_name: str,
+        lower_energy: Parameter,
+        upper_energy: Parameter,
+        frame: ReferenceFrame = SourceFrame,
+        include_undetected: bool = False,
+        config: Union[None, HierarchicalNuConfig] = None,
+    ):
+        """
+        Factory for power law sources defined in
+        HDF5 files ( update: output from popsynth).
+
+        :param file_name: File name of source list.
+        :param lower_energy: Lower energy bound in definition of the luminosity.
+        :param upper_energy: Upper energy bound in definition of the luminosity.
+        :param frame: Reference frame in which source energy is defined
+        :param include_undetected: Include sources that are not detected in population.
+        :param config: Instance of HierarchicalNuConfig to check for parameter bounds.
+        """
+
+        source_list = cls._make_sources_from_file(
+            file_name,
+            lower_energy,
+            upper_energy,
+            cls.make_powerlaw_source,
+            frame,
+            include_undetected,
+            config,
+        )
+
+        return source_list
+
+    @classmethod
+    def make_broken_powerlaw_sources_from_file(
+        cls,
+        file_name: str,
+        lower_energy: Parameter,
+        upper_energy: Parameter,
+        frame: ReferenceFrame = SourceFrame,
+        include_undetected: bool = False,
+        config: Union[None, HierarchicalNuConfig] = None,
+    ):
+        """
+        Factory for power law sources defined in
+        HDF5 files ( update: output from popsynth).
+
+        :param file_name: File name of source list.
+        :param lower_energy: Lower energy bound in definition of the luminosity.
+        :param upper_energy: Upper energy bound in definition of the luminosity.
+        :param frame: Reference frame in which source energy is defined
+        :param include_undetected: Include sources that are not detected in population.
+        :param config: Instance of HierarchicalNuConfig to check for parameter bounds.
+        """
+
+        source_list = cls._make_sources_from_file(
+            file_name,
+            lower_energy,
+            upper_energy,
+            cls.make_twicebroken_powerlaw_source,
+            frame,
+            include_undetected,
+            config,
+        )
+
+        return source_list
+
+    '''
+    @classmethod
+    def make_logparabola_sources_from_file(
+        cls,
+        file_name: str,
+        lower_energy: Parameter,
+        upper_energy: Parameter,
+        normalisation_energy: u.GeV
+        frame: ReferenceFrame = SourceFrame,
+        include_undetected: bool = False,
+        config: Union[None, HierarchicalNuConfig] = None,
+    ):
+        """
+        Factory for power law sources defined in
+        HDF5 files ( update: output from popsynth).
+
+        :param file_name: File name of source list.
+        :param lower_energy: Lower energy bound in definition of the luminosity.
+        :param upper_energy: Upper energy bound in definition of the luminosity.
+        :param frame: Reference frame in which source energy is defined
+        :param include_undetected: Include sources that are not detected in population.
+        :param config: Instance of HierarchicalNuConfig to check for parameter bounds.
+        """
+
+        source_list = cls._make_sources_from_file(
+            file_name,
+            lower_energy,
+            upper_energy,
+            cls.make_logparabola_source,
+            frame,
+            include_undetected,
+            config,
+            normalisation_energy=normalisation_energy,
+        )
+
+        return source_list
+    '''
 
     @property
     def dec(self):
@@ -353,7 +797,7 @@ class PointSource(Source):
     def cosz(self):
         # only valid for IceCube
         # TODO: move to detector model
-        return np.cos(self._dec.value + np.pi / 2)
+        return np.cos(self._dec.to_value(u.rad) + np.pi / 2)
 
     @property
     def redshift(self):
@@ -365,15 +809,17 @@ class PointSource(Source):
 
     @property
     @u.quantity_input
-    def luminosity(self) -> u.erg / u.s:
+    def luminosity(self) -> u.Quantity[u.erg / u.s]:
         return self._luminosity
 
+    """
     @luminosity.setter
     @u.quantity_input
     # TODO add calculation for fluxes etc.
-    # needs to be defined in the source frame
-    def luminosity(self, value: u.erg / u.s):
+    # needs to be defined according to the ReferenceFrame
+    def luminosity(self, value: u.Quantity[u.erg / u.s]):
         self._luminosity = value
+    """
 
 
 class DiffuseSource(Source):
@@ -385,10 +831,20 @@ class DiffuseSource(Source):
         redshift: float
         flux_model
             Flux model of the source. Should return units 1/(GeV cm^2 s sr)
+        frame
+            Reference frame in which the source is defined
     """
 
-    def __init__(self, name: str, redshift: float, flux_model, *args, **kwargs):
-        super().__init__(name)
+    def __init__(
+        self,
+        name: str,
+        redshift: float,
+        flux_model,
+        frame: ReferenceFrame = SourceFrame,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(name, frame)
         self._redshift = redshift
         self._flux_model = flux_model
         self._parameters = flux_model.parameters
@@ -402,21 +858,42 @@ class DiffuseSource(Source):
         self._redshift = value
 
 
+class BackgroundSource(Source):
+    """
+    Class that models background with data
+    """
+
+    def __init__(self, name, *detector_model):
+        from ..detector.r2021_bg_llh import R2021BackgroundLLH
+
+        super().__init__(name, DetectorFrame)
+        self._name = name
+        self._flux_model = None
+        self._detector_model = detector_model
+
+        self._likelihoods = {_: R2021BackgroundLLH(_.P) for _ in detector_model}
+        self._frame = DetectorFrame
+
+    def flux(self):
+        raise NotImplementedError("Data-driven background model has no flux.")
+
+
 class Sources:
     """
     Container for sources with a set of factory methods
-    for and easy source setup interface.
+    for an easy source setup interface.
     """
 
     def __init__(self):
-        # Number of source components
-        self.N = 0
-
         # Initialise the source list
         self._sources = []
 
     def __len__(self):
-        return self.N
+        return len(self.sources)
+
+    @property
+    def N(self):
+        return len(self)
 
     @property
     def sources(self):
@@ -432,7 +909,6 @@ class Sources:
 
         else:
             self._sources = value
-            self.N = len(self._sources)
 
     def add(self, source):
         """
@@ -441,7 +917,6 @@ class Sources:
 
         if isinstance(source, Source):
             self._sources.append(source)
-            self.N += 1
 
         elif isinstance(source, list) and all(isinstance(s, Source) for s in source):
             for s in source:
@@ -461,6 +936,7 @@ class Sources:
         lower: Parameter,
         upper: Parameter,
         z: float = 0,
+        frame: ReferenceFrame = SourceFrame,
     ):
         """
         Add diffuse component based on point
@@ -481,13 +957,15 @@ class Sources:
             flux_norm,
             norm_energy,
             diff_index,
-            lower.value / (1.0 + z),
-            upper.value / (1.0 + z),
+            frame.transform(lower.value, z),
+            frame.transform(upper.value, z),
         )
         flux_model = IsotropicDiffuseBG(spectral_shape)
 
         # define component
-        diffuse_component = DiffuseSource("diffuse_bg", z, flux_model=flux_model)
+        diffuse_component = DiffuseSource(
+            "diffuse_bg", z, flux_model=flux_model, frame=frame
+        )
 
         self.add(diffuse_component)
 
@@ -502,6 +980,28 @@ class Sources:
                 z.append(source.redshift)
 
         return max(z)
+
+    def _get_point_source_frame(self):
+        """
+        Check what frame point sources are defined in.
+        """
+
+        frames = []
+        for source in self.sources:
+            if isinstance(source, PointSource):
+                frames.append(source.frame)
+
+        if not frames[1:] == frames[:-1]:
+            raise NotImplementedError(
+                "All point sources must be defined in the same RefrenceFrame"
+            )
+
+        self._point_source_frame = frames[0]
+
+    @property
+    def point_source_frame(self):
+        self._get_point_source_frame()
+        return self._point_source_frame
 
     def _get_point_source_spectrum(self):
         """
@@ -519,7 +1019,12 @@ class Sources:
 
         self._point_source_spectrum = types[0]
 
-    def add_atmospheric_component(self):
+    @property
+    def point_source_spectrum(self):
+        self._get_point_source_spectrum()
+        return self._point_source_spectrum
+
+    def add_atmospheric_component(self, index: float = 0.0, cache_dir: str = ".cache"):
         """
         Add an atmospheric flux component based on the IceCube observations.
         """
@@ -527,26 +1032,86 @@ class Sources:
         Emin = Parameter.get_parameter("Emin").value.to(u.GeV)
         Emax = Parameter.get_parameter("Emax").value.to(u.GeV)
 
-        flux_model = AtmosphericNuMuFlux(Emin, Emax)
+        flux_model = AtmosphericNuMuFlux(Emin, Emax, index=index, cache_dir=cache_dir)
+
+        # Create a parameter for F_atmo to carry information on the par_range
+        # The value itself is irrelevant for fits
+        F_atmo = Parameter(
+            flux_model.total_flux_int,
+            "F_atmo",
+            par_range=(0, 3.0) * (1 / (u.m**2 * u.s)),
+            fixed=True,
+        )
 
         atmospheric_component = DiffuseSource(
             "atmo_bg",
             0,
             flux_model=flux_model,
+            frame=DetectorFrame,
         )
 
         self.add(atmospheric_component)
 
+    def add_background(self, *detector_model):
+        self.add(BackgroundSource("bg", *detector_model))
+
+    def select(self, mask: npt.NDArray[np.bool_], only_point_sources: bool = False):
+        """
+        Select some subset of existing sources by providing a mask.
+        NB: Assumes only one diffuse and one atmospheric component
+        :param mask: Array of bools with same length as the number of sources.
+        :param only_point_sources: Set `True` to only make selections on point sources
+        """
+
+        if only_point_sources:
+            assert len(mask) == len(self.point_source)
+
+            # Remove parameters describing removed point sources
+            for i, s in enumerate(self.point_source):
+                if not mask[i]:
+                    Parameter.remove_parameter("%s_src_index" % s.name)
+                    Parameter.remove_parameter("%s_luminosity" % s.name)
+                    Parameter.remove_parameter("%s_norm" % s.name)
+
+            # Make selection on point sources
+            _point_sources = np.array(self._point_source)
+
+            _point_sources = _point_sources[mask]
+
+            _sources = list(_point_sources)
+
+            # Add back diffuse and atmospheric components
+            _sources.append(self.diffuse)
+            _sources.append(self.atmospheric)
+            _sources.append(self.background)
+
+        else:
+            assert len(mask) == self.N
+
+            # Remove parameters describing removed point sources
+            for i, s in enumerate(self.sources):
+                if not mask[i] and isinstance(s, PointSource):
+                    Parameter.remove_parameter("%s_src_index" % s.name)
+                    Parameter.remove_parameter("%s_luminosity" % s.name)
+                    Parameter.remove_parameter("%s_norm" % s.name)
+
+            # Select on over all sources
+            _sources = np.array(self.sources)
+
+            _sources = _sources[mask]
+
+        self.sources = list(_sources)
+
     def select_below_redshift(self, zth):
         """
-        remove sources with redshift above a certain threshold.
+        Remove sources with redshift above a certain threshold.
+        NB: Replaced by `Sources.select()`, but kept for backwards compatibility.
         """
 
         self.sources = [s for s in self.sources if s.redshift <= zth]
 
     def remove(self, i):
         self._sources.pop(i)
-        self.N -= 1
 
     def total_flux_int(self):
         tot = 0
@@ -616,6 +1181,7 @@ class Sources:
         self._point_source = []
         self._diffuse = None
         self._atmospheric = None
+        self._background = None
 
         for source in self.sources:
             if isinstance(source, PointSource):
@@ -627,9 +1193,12 @@ class Sources:
 
                 elif isinstance(source.flux_model, AtmosphericNuMuFlux):
                     self._atmospheric = source
+            elif isinstance(source, BackgroundSource):
+                self._background = source
 
         if self._point_source:
             self._get_point_source_spectrum()
+            self._get_point_source_frame()
 
         new_list = self._point_source.copy()
 
@@ -638,6 +1207,9 @@ class Sources:
 
         if self._atmospheric:
             new_list.append(self._atmospheric)
+
+        if self._background:
+            new_list.append(self._background)
 
         self.sources = new_list
 
@@ -653,9 +1225,19 @@ class Sources:
 
         if self._point_source:
             return self._point_source_spectrum
-
         else:
-            raise ValueError("No point sources in  source list")
+            logger.warning("No point sources in source list")
+            return None
+
+    @property
+    def point_source_frame(self):
+        self.organise()
+
+        if self._point_source:
+            return self._point_source_frame
+        else:
+            logger.warning("No point sources in source list")
+            return None
 
     @property
     def diffuse(self):
@@ -685,6 +1267,16 @@ class Sources:
 
         return self._atmospheric.flux_model
 
+    @property
+    def background(self):
+        self.organise()
+
+        return self._background
+
+    @property
+    def background_flux(self):
+        raise NotImplementedError()
+
     def __iter__(self):
         for source in self._sources:
             yield source
@@ -692,21 +1284,20 @@ class Sources:
     def __getitem__(self, key):
         return self._sources[key]
 
-    def save(self, file_name):
-        """
-        Write the Sources to an HDF5 file.
-        """
+    def __bool__(self):
+        return bool(len(self))
 
-        raise NotImplementedError()
+    def make_seyfert_functions(self):
+        lpdf = []
+        flux_tab = []
+        flux_conv = []
+        for s in self.point_source:
+            ret = s._flux_model.spectral_shape.make_stan_functions()
+            lpdf.append(ret[0])
+            flux_tab.append(ret[1])
+            flux_conv.append(ret[2])
 
-    @classmethod
-    def from_file(cls, file_name):
-        """
-        Load Sources from the HDF5 file output
-        by the save() method.
-        """
-
-        raise NotImplementedError()
+        return lpdf, flux_tab, flux_conv
 
 
 def uv_to_icrs(unit_vector):

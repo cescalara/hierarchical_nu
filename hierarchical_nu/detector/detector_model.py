@@ -40,35 +40,66 @@ class EffectiveArea(UserDefinedFunction, metaclass=ABCMeta):
     def _make_spline(self):
         log_tE_lower_bin_edges = np.log10(self._tE_bin_edges[:-1])
         log_tE_upper_bin_edges = np.log10(self._tE_bin_edges[1:])
+        """
         log_tE_bin_c = np.concatenate(
             (
                 np.array([log_tE_lower_bin_edges[0]]),
                 (log_tE_lower_bin_edges + log_tE_upper_bin_edges) / 2,
+                np.array([log_tE_upper_bin_edges[-1]]),
             ),
         )
+        """
+        log_tE_bin_c = (log_tE_lower_bin_edges + log_tE_upper_bin_edges) / 2
+        log_tE_bin_c[0] = log_tE_lower_bin_edges[0]
+        log_tE_bin_c[-1] = log_tE_upper_bin_edges[-1]
+        tE_bin_c = np.power(10, log_tE_bin_c)
 
         cosz_lower = self._cosz_bin_edges[:-1]
         cosz_upper = self._cosz_bin_edges[1:]
         cosz_c = np.concatenate(
-            (np.array([cosz_lower[0]]), (cosz_lower + cosz_upper) / 2)
+            (
+                np.array([cosz_lower[0]]),
+                (cosz_lower + cosz_upper) / 2,
+                np.array([cosz_upper[-1]]),
+            )
         )
 
-        # Duplicate slice at lowest energy
+        # Duplicate slice at lowest and highest energy
+        """
         to_be_splined_aeff = np.concatenate(
-            (np.atleast_2d(self.eff_area[0, :]), self.eff_area), axis=0
+            (
+                np.atleast_2d(self.eff_area[0, :]),
+                self.eff_area,
+                (np.atleast_2d(self.eff_area[-1, :])),
+            ),
+            axis=0,
         )
-        # Duplicate slice at cosz=-1 (vertical upgoing)
+        """
+        to_be_splined_aeff = self.eff_area.copy()
+        # Duplicate slice at cosz=-1 (vertical upgoing) and cosz=1 (vertical downgoing)
         to_be_splined_aeff = np.concatenate(
-            (np.atleast_2d(to_be_splined_aeff[:, 0]).T, to_be_splined_aeff), axis=1
+            (
+                np.atleast_2d(to_be_splined_aeff[:, 0]).T,
+                to_be_splined_aeff,
+                (np.atleast_2d(to_be_splined_aeff[:, -1]).T),
+            ),
+            axis=1,
         )
+        non_zero_min = to_be_splined_aeff[to_be_splined_aeff > 0.0].min()
+        to_be_splined_aeff[to_be_splined_aeff == 0.0] = non_zero_min
 
+        # fill_value = np.log10(np.min(to_be_splined_aeff[to_be_splined_aeff > 0.]))
         self._eff_area_spline = RegularGridInterpolator(
             (log_tE_bin_c, cosz_c),
-            to_be_splined_aeff,
+            np.log10(to_be_splined_aeff),
             bounds_error=False,
-            fill_value=0,
+            fill_value=np.log10(non_zero_min),
+            # fill_value=0.0,
             method="linear",
         )
+
+    def spline(self, logE, cosz):
+        return self.eff_area_spline((logE, cosz))
 
     @abstractmethod
     def setup(self) -> None:
@@ -120,13 +151,13 @@ class EffectiveArea(UserDefinedFunction, metaclass=ABCMeta):
 
         return self._rs_bbpl_params
 
-    @property
-    def eff_area_spline(self):
+    # @property
+    def eff_area_spline(self, vals):
         """
         2D spline of effective area.
         """
 
-        return self._eff_area_spline
+        return np.power(10, self._eff_area_spline(vals))
 
     @abstractmethod
     def generate_code(self):
@@ -137,13 +168,15 @@ class EffectiveArea(UserDefinedFunction, metaclass=ABCMeta):
         pass
 
 
-class EnergyResolution(UserDefinedFunction, metaclass=ABCMeta):
+class EnergyResolution(metaclass=ABCMeta):
     """
     Abstract base class defining the energy resolution interface.
 
     Signature for __call__ of UserDefinedFunction for DistributionMode.PDF is
     log10(Etrue): real, log10(Edet): real, omega_det: unit_vector[3]
     even if some parameter might not be used
+
+    Since there are two implementations of
     """
 
     @abstractmethod
@@ -171,6 +204,58 @@ class EnergyResolution(UserDefinedFunction, metaclass=ABCMeta):
         """
 
         return self._tE_bin_edges
+
+    @abstractmethod
+    def generate_code(self):
+        """
+        Generates stan code.
+        """
+
+        pass
+
+
+class GridInterpolationEnergyResolution(
+    EnergyResolution, UserDefinedFunction, metaclass=ABCMeta
+):
+
+    @property
+    def log_rE_bin_edges(self):
+        return self._log_rE_bin_edges
+
+    @property
+    def log_rE_binc(self):
+        return self._log_rE_bin_edges
+
+    @property
+    def log_tE_bin_edges(self):
+        return self._log_tE_bin_edges
+
+    @property
+    def log_tE_binc(self):
+        return self._log_tE_binc
+
+    @property
+    def dec_bin_edges(self):
+        return self._dec_bin_edges
+
+    @property
+    def dec_binc(self):
+        return self._dec_binc
+
+    @property
+    def sin_dec_edges(self):
+        return self._sin_dec_edges
+
+    @property
+    def sin_dec_binc(self):
+        return self._sin_dec_binc
+
+    @property
+    def evaluations(self):
+        return self._evaluations
+
+
+class LogNormEnergyResolution(EnergyResolution, UserDefinedFunction, metaclass=ABCMeta):
 
     @property
     def rE_bin_edges(self):
@@ -496,7 +581,11 @@ class EnergyResolution(UserDefinedFunction, metaclass=ABCMeta):
 
     @u.quantity_input
     def prob_Edet_above_threshold(
-        self, true_energy: u.GeV, threshold_energy: u.GeV, dec: u.rad = 0.0 * u.rad
+        self,
+        true_energy: u.GeV,
+        threshold_energy: u.GeV,
+        dec: u.rad = 0.0 * u.rad,
+        use_lognorm: bool = True,
     ):
         """
         P(Edet > Edet_min | E) for use in precomputation.
@@ -525,14 +614,6 @@ class EnergyResolution(UserDefinedFunction, metaclass=ABCMeta):
         prob = 1 - model(np.log10(threshold_energy.to(u.GeV).value), model_params)
 
         return prob
-
-    @abstractmethod
-    def generate_code(self):
-        """
-        Generates stan code.
-        """
-
-        pass
 
 
 class AngularResolution(UserDefinedFunction, metaclass=ABCMeta):
@@ -694,7 +775,7 @@ class DetectorModel(UserDefinedFunction, metaclass=ABCMeta):
         Generate a wrapper for the IRF in `DistributionMode.PDF`.
         Assumes that astro diffuse and atmo diffuse model components are present.
         If not, they are disregarded by the model likelihood.
-        Has signature
+        Has signature dependent on the parameter `single_ps`, defaulting to False:
         real true_energy [Gev] : true neutrino energy
         real detected_energy [GeV] : detected muon energy
         unit_vector[3] : detected direction of event
@@ -704,6 +785,7 @@ class DetectorModel(UserDefinedFunction, metaclass=ABCMeta):
         2 array[Ns] real : log(effective area) of all point sources
         3 array[3] real : array with log(energy likelihood), log(effective area)
             and log(effective area) for atmospheric component.
+        If `single_ps==True`, all arrays regarding the PS are instead reals.
         For cascades the last entry is negative_infinity().
         """
 

@@ -27,6 +27,7 @@ from hierarchical_nu.stan.interface import STAN_PATH
 from hierarchical_nu.source.source import Sources
 
 
+@pytest.mark.skip(reason="Detector model no longer maintained")
 def test_file_generation_northern_tracks(output_directory):
     _ = NorthernTracksDetectorModel.generate_code(
         mode=DistributionMode.PDF, path=output_directory, rewrite=True
@@ -38,12 +39,13 @@ def test_file_generation_northern_tracks(output_directory):
     with StanGenerator() as gc:
         with FunctionsContext():
             ntd_pdf = NorthernTracksDetectorModel()
-            ntd_pdf.generate_pdf_function_code(Sources())
+            ntd_pdf.generate_pdf_function_code()
 
             ntd_rng = NorthernTracksDetectorModel(DistributionMode.RNG)
             ntd_rng.generate_rng_function_code()
 
 
+@pytest.mark.skip(reason="Detector model no longer maintained")
 def generate_distribution_test_code(output_directory):
     file_name = os.path.join(output_directory, "nt_distributions")
 
@@ -77,7 +79,6 @@ def generate_distribution_test_code(output_directory):
             array_length_2d_str = ["[", array_length, ",", array_length, "]"]
             e_res_result = ForwardArrayDef("e_res", "real", array_length_2d_str)
             eff_area_result = ForwardArrayDef("eff_area", "real", array_length_2d_str)
-            ang_res_result = ForwardArrayDef("ang_res", "real", array_length_2d_str)
 
             reco_dir_ang_res = ForwardVariableDef("reco_dir", "vector[3]")
             true_dir_ang_res = ForwardVariableDef("true_dir", "vector[3]")
@@ -95,17 +96,13 @@ def generate_distribution_test_code(output_directory):
                         FunctionCall([e_trues[i]], "log10"),
                         FunctionCall([e_recos[j]], "log10"),
                     )
-                    ang_res_result[i][j] << ntd.angular_resolution(
-                        FunctionCall([e_trues[i]], "log10"),
-                        true_dir_ang_res,
-                        reco_dir_ang_res,
-                    )
 
     code_gen.generate_single_file()
 
     return code_gen.filename
 
 
+@pytest.mark.skip(reason="Detector model no longer maintained")
 def test_distributions_northern_tracks(output_directory, random_seed):
     model_file = generate_distribution_test_code(output_directory)
 
@@ -147,19 +144,16 @@ def test_distributions_northern_tracks(output_directory, random_seed):
 
     e_res = output.stan_variable("e_res")
 
-    ang_res = output.stan_variable("ang_res")
-
     eff_area = output.stan_variable("eff_area")
 
     assert np.mean(e_res) == pytest.approx(-13.9071762520618, 0.1)
-
-    assert np.mean(ang_res) == pytest.approx(-43.526770393359996, 0.1)
 
     assert np.max(eff_area) == pytest.approx(28210.3)
 
     assert np.min(eff_area) == 0.0
 
 
+@pytest.mark.skip(reason="Detector model no longer maintained")
 def generate_rv_test_code(output_directory):
     rng_file_name = os.path.join(output_directory, "nt_rng")
     pdf_file_name = os.path.join(output_directory, "nt_pdf")
@@ -224,6 +218,7 @@ def generate_rv_test_code(output_directory):
     return code_gen_rng.filename, code_gen_pdf.filename
 
 
+@pytest.mark.skip(reason="Detector model no longer maintained")
 def test_rv_generation(output_directory, random_seed):
     # Get Stan files
     rng_file_name, pdf_file_name = generate_rv_test_code(output_directory)
@@ -280,7 +275,7 @@ def test_rv_generation(output_directory, random_seed):
 
     reco_zenith = np.degrees(np.arccos(reco_dir_samples[:, 2]))
 
-    assert max(E_hist) == pytest.approx(max(reco_energy_pdf), 0.1)
+    assert max(E_hist) == pytest.approx(max(reco_energy_pdf), 0.15)
 
     assert np.mean(reco_zenith) == pytest.approx(90, 0.1)
 

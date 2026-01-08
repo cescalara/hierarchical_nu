@@ -24,7 +24,7 @@ from ..backend import (
 )
 from .detector_model import (
     EffectiveArea,
-    EnergyResolution,
+    LogNormEnergyResolution,
     AngularResolution,
     DetectorModel,
 )
@@ -52,6 +52,7 @@ class NorthernTracksEffectiveArea(EffectiveArea):
     NAME = "NorthernTracksEffectiveArea"
 
     def __init__(self) -> None:
+        logger.warning("Northern tracks detector model is no longer maintained")
         self.setup()
 
         self._func_name = "NorthernTracksEffectiveArea"
@@ -117,8 +118,7 @@ class NorthernTracksEffectiveArea(EffectiveArea):
         self._rs_bbpl_params["gamma2_scale"] = 1.2
 
 
-class NorthernTracksEnergyResolution(EnergyResolution):
-
+class NorthernTracksEnergyResolution(LogNormEnergyResolution):
     """
     Energy resolution for Northern Tracks Sample
 
@@ -141,6 +141,8 @@ class NorthernTracksEnergyResolution(EnergyResolution):
             inputs: List[TExpression]
                 First item is true energy, second item is reco energy
         """
+
+        logger.warning("Northern tracks detector model is no longer maintained")
 
         self.mode = mode
         self._poly_params_mu: Sequence = []
@@ -373,6 +375,7 @@ class NorthernTracksAngularResolution(AngularResolution):
     RNG_NAME = "NorthernTracksAngularResolution_rng"
 
     def __init__(self, mode: DistributionMode = DistributionMode.PDF) -> None:
+        logger.warning("Northern tracks detector model is no longer maintained")
         self.mode = mode
         if self.mode == DistributionMode.PDF:
             self._func_name = self.PDF_NAME
@@ -390,8 +393,16 @@ class NorthernTracksAngularResolution(AngularResolution):
         if self.mode == DistributionMode.PDF:
             super().__init__(
                 self.PDF_NAME,
-                ["log_true_energy", "true_dir", "reco_dir"],
-                ["real", "vector", "vector"],
+                [
+                    "true_dir",
+                    "reco_dir",
+                    "kappa",
+                ],
+                [
+                    "vector",
+                    "vector",
+                    "real",
+                ],
                 "real",
             )
 
@@ -404,24 +415,25 @@ class NorthernTracksAngularResolution(AngularResolution):
             )
 
         with self:
-            # Clip true energy
-            kappa = ForwardVariableDef("kappa", "real")
-            clipped_log_e = TruncatedParameterization(
-                "log_true_energy", np.log10(self._Emin), np.log10(self._Emax)
-            )
-
-            kappa << PolynomialParameterization(
-                clipped_log_e,
-                self._poly_params,
-                "NorthernTracksAngularResolutionPolyCoeffs",
-            )
-
             if self.mode == DistributionMode.PDF:
-                # VMF expects x_obs, x_true
-                vmf = VMFParameterization(["reco_dir", "true_dir"], kappa, self.mode)
-                ReturnStatement([vmf])
+                angular_parameterisation = VMFParameterization(
+                    ["true_dir", "reco_dir"], "kappa", self.mode
+                )
+                ReturnStatement([angular_parameterisation])
 
             elif self.mode == DistributionMode.RNG:
+                # Clip true energy
+                kappa = ForwardVariableDef("kappa", "real")
+                clipped_log_e = TruncatedParameterization(
+                    "log_true_energy", np.log10(self._Emin), np.log10(self._Emax)
+                )
+
+                kappa << PolynomialParameterization(
+                    clipped_log_e,
+                    self._poly_params,
+                    "NorthernTracksAngularResolutionPolyCoeffs",
+                )
+
                 pre_event = ForwardVariableDef("pre_event", "vector[4]")
                 vmf = VMFParameterization(["true_dir"], kappa, self.mode)
                 pre_event[1:3] << vmf
@@ -510,6 +522,7 @@ class NorthernTracksDetectorModel(DetectorModel, UserDefinedFunction):
     PDF_FILENAME = "northern_tracks_pdf.stan"
 
     def __init__(self, mode: DistributionMode = DistributionMode.PDF):
+        logger.warning("Northern tracks detector model is no longer maintained")
         super().__init__(mode, event_type="tracks")
 
         if self.mode == DistributionMode.PDF:
@@ -534,12 +547,12 @@ class NorthernTracksDetectorModel(DetectorModel, UserDefinedFunction):
     def _get_angular_resolution(self):
         return self._angular_resolution
 
-    def generate_pdf_function_code(self):
+    def generate_pdf_function_code(self, single_ps: bool = False):
         """
         Generate a wrapper for the IRF in `DistributionMode.PDF`.
         Assumes that astro diffuse and atmo diffuse model components are present.
         If not, they are disregarded by the model likelihood.
-        Has signature
+        Has signature dependent on the parameter `single_ps`, defaulting to False:
         real true_energy [Gev] : true neutrino energy
         real detected_energy [GeV] : detected muon energy
         unit_vector[3] : detected direction of event
@@ -549,31 +562,55 @@ class NorthernTracksDetectorModel(DetectorModel, UserDefinedFunction):
         2 array[Ns] real : log(effective area) of all point sources
         3 array[3] real : array with log(energy likelihood), log(effective area)
             and log(effective area) for atmospheric component.
+        If `single_ps==True`, all arrays regarding the PS are instead reals.
         For cascades the last entry is negative_infinity().
         """
 
-        UserDefinedFunction.__init__(
-            self,
-            self._func_name,
-            ["true_energy", "detected_energy", "omega_det", "src_pos"],
-            ["real", "real", "vector", "array[] vector"],
-            "tuple(array[] real, array[] real, array[] real)",
-        )
+        if not single_ps:
+            UserDefinedFunction.__init__(
+                self,
+                self._func_name,
+                ["true_energy", "detected_energy", "omega_det", "src_pos"],
+                ["real", "real", "vector", "array[] vector"],
+                "tuple(array[] real, array[] real, array[] real)",
+            )
+        else:
+            UserDefinedFunction.__init__(
+                self,
+                self._func_name,
+                ["true_energy", "detected_energy", "omega_det", "src_pos"],
+                ["real", "real", "vector", "vector"],
+                "tuple(real, real, array[] real)",
+            )
 
         with self:
-            Ns = InstantVariableDef("Ns", "int", ["size(src_pos)"])
-            ps_eres = ForwardArrayDef("ps_eres", "real", ["[", Ns, "]"])
-            ps_aeff = ForwardArrayDef("ps_aeff", "real", ["[", Ns, "]"])
+            if not single_ps:
+                Ns = InstantVariableDef("Ns", "int", ["size(src_pos)"])
+                ps_eres = ForwardArrayDef("ps_eres", "real", ["[", Ns, "]"])
+                ps_aeff = ForwardArrayDef("ps_aeff", "real", ["[", Ns, "]"])
+
+            else:
+                ps_eres = ForwardVariableDef("ps_eres", "real")
+                ps_aeff = ForwardVariableDef("ps_aeff", "real")
             diff = ForwardArrayDef("diff", "real", ["[3]"])
             eres = ForwardVariableDef("eres", "real")
             eres << self.energy_resolution(
                 "log10(true_energy)", "log10(detected_energy)"
             )
-            with ForLoopContext(1, Ns, "i") as i:
-                ps_eres[i] << eres
-                ps_aeff[i] << FunctionCall(
+            if not single_ps:
+                with ForLoopContext(1, Ns, "i") as i:
+                    ps_eres[i] << eres
+                    ps_aeff[i] << FunctionCall(
+                        [
+                            self.effective_area("true_energy", "src_pos[i]"),
+                        ],
+                        "log",
+                    )
+            else:
+                ps_eres << eres
+                ps_aeff << FunctionCall(
                     [
-                        self.effective_area("true_energy", "src_pos[i]"),
+                        self.effective_area("true_energy", "src_pos"),
                     ],
                     "log",
                 )

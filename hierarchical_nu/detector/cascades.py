@@ -24,7 +24,7 @@ from ..backend import (
 )
 from .detector_model import (
     EffectiveArea,
-    EnergyResolution,
+    LogNormEnergyResolution,
     AngularResolution,
     DetectorModel,
 )
@@ -50,6 +50,7 @@ class CascadesEffectiveArea(EffectiveArea):
     NAME = "CascadesEffectiveArea"
 
     def __init__(self) -> None:
+        logger.warning("Cascades detector model is no longer maintained")
         self._func_name = self.NAME
         self.setup()
 
@@ -115,7 +116,7 @@ class CascadesEffectiveArea(EffectiveArea):
         self._rs_bbpl_params["gamma2_scale"] = 0.5
 
 
-class CascadesEnergyResolution(EnergyResolution):
+class CascadesEnergyResolution(LogNormEnergyResolution):
     """
     Energy resolution based on the cascade_model simulation.
     """
@@ -140,6 +141,7 @@ class CascadesEnergyResolution(EnergyResolution):
         are then fit with a polynomial for fast interpolation and evaluation.
         """
 
+        logger.warning("Cascades detector model is no longer maintained")
         self.mode = mode
 
         # Parameters of polynomials for lognormal mu and sd
@@ -348,6 +350,7 @@ class CascadesAngularResolution(AngularResolution):
     RNG_NAME = "CascadesAngularResolution_rng"
 
     def __init__(self, mode: DistributionMode = DistributionMode.PDF) -> None:
+        logger.warning("Cascades detector model is no longer maintained")
         self.mode = mode
         self._kappa_grid: np.ndarray = None
         self._Egrid: np.ndarray = None
@@ -366,8 +369,8 @@ class CascadesAngularResolution(AngularResolution):
         if self.mode == DistributionMode.PDF:
             super().__init__(
                 self._func_name,
-                ["log_true_energy", "true_dir", "reco_dir"],
-                ["real", "vector", "vector"],
+                ["true_dir", "reco_dir", "kappa"],
+                ["vector", "vector", "real"],
                 "real",
             )
 
@@ -378,22 +381,24 @@ class CascadesAngularResolution(AngularResolution):
                 ["real", "vector"],
                 "vector",
             )
+
         with self:
-            # Clip true energy
-            clipped_log_e = TruncatedParameterization(
-                "log_true_energy", np.log10(self._Emin), np.log10(self._Emax)
-            )
-
-            kappa = PolynomialParameterization(
-                clipped_log_e, self._poly_params, "CascadesAngularResolutionPolyCoeffs"
-            )
-
             if self.mode == DistributionMode.PDF:
                 # VMF expects x_obs, x_true
-                vmf = VMFParameterization(["reco_dir", "true_dir"], kappa, self.mode)
+                vmf = VMFParameterization(["reco_dir", "true_dir"], "kappa", self.mode)
                 ReturnStatement([vmf])
 
             elif self.mode == DistributionMode.RNG:
+                # Clip true energy
+                clipped_log_e = TruncatedParameterization(
+                    "log_true_energy", np.log10(self._Emin), np.log10(self._Emax)
+                )
+
+                kappa = PolynomialParameterization(
+                    clipped_log_e,
+                    self._poly_params,
+                    "CascadesAngularResolutionPolyCoeffs",
+                )
                 pre_event = ForwardVariableDef("pre_event", "vector[4]")
                 vmf = VMFParameterization(["true_dir"], kappa, self.mode)
                 pre_event[1:3] << vmf
@@ -480,6 +485,7 @@ class CascadesDetectorModel(DetectorModel):
     PDF_FILENAME = "cascades_pdf.stan"
 
     def __init__(self, mode: DistributionMode = DistributionMode.PDF):
+        logger.warning("Cascades detector model is no longer maintained")
         super().__init__(mode, event_type="cascades")
 
         if self.mode == DistributionMode.PDF:
@@ -504,12 +510,12 @@ class CascadesDetectorModel(DetectorModel):
     def _get_angular_resolution(self):
         return self._angular_resolution
 
-    def generate_pdf_function_code(self):
+    def generate_pdf_function_code(self, single_ps: bool = False):
         """
         Generate a wrapper for the IRF in `DistributionMode.PDF`.
         Assumes that astro diffuse and atmo diffuse model components are present.
         If not, they are disregarded by the model likelihood.
-        Has signature
+        Has signature dependent on the parameter `single_ps`, defaulting to False:
         real true_energy [Gev] : true neutrino energy
         real detected_energy [GeV] : detected muon energy
         unit_vector[3] : detected direction of event
@@ -519,34 +525,59 @@ class CascadesDetectorModel(DetectorModel):
         2 array[Ns] real : log(effective area) of all point sources
         3 array[3] real : array with log(energy likelihood), log(effective area)
             and log(effective area) for atmospheric component.
+        If `single_ps==True`, all arrays regarding the PS are instead reals.
         For cascades the last entry is negative_infinity().
         """
 
-        UserDefinedFunction.__init__(
-            self,
-            self._func_name,
-            ["true_energy", "detected_energy", "omega_det", "src_pos"],
-            ["real", "real", "vector", "array[] vector"],
-            "tuple(array[] real, array[] real, array[] real)",
-        )
-        with self:
-            Ns = InstantVariableDef("Ns", "int", ["size(src_pos)"])
+        if not single_ps:
+            UserDefinedFunction.__init__(
+                self,
+                self._func_name,
+                ["true_energy", "detected_energy", "omega_det", "src_pos"],
+                ["real", "real", "vector", "array[] vector"],
+                "tuple(array[] real, array[] real, array[] real)",
+            )
+        else:
+            UserDefinedFunction.__init__(
+                self,
+                self._func_name,
+                ["true_energy", "detected_energy", "omega_det", "src_pos"],
+                ["real", "real", "vector", "vector"],
+                "tuple(real, real, array[] real)",
+            )
 
-            ps_eres = ForwardArrayDef("ps_eres", "real", ["[", Ns, "]"])
-            ps_aeff = ForwardArrayDef("ps_aeff", "real", ["[", Ns, "]"])
+        with self:
+            if not single_ps:
+                Ns = InstantVariableDef("Ns", "int", ["size(src_pos)"])
+                ps_eres = ForwardArrayDef("ps_eres", "real", ["[", Ns, "]"])
+                ps_aeff = ForwardArrayDef("ps_aeff", "real", ["[", Ns, "]"])
+
+            else:
+                ps_eres = ForwardVariableDef("ps_eres", "real")
+                ps_aeff = ForwardVariableDef("ps_aeff", "real")
             diff = ForwardArrayDef("diff", "real", ["[3]"])
             eres = ForwardVariableDef("eres", "real")
             eres << self.energy_resolution(
                 "log10(true_energy)", "log10(detected_energy)"
             )
-            with ForLoopContext(1, Ns, "i") as i:
-                ps_eres[i] << eres
-                ps_aeff[i] << FunctionCall(
+            if not single_ps:
+                with ForLoopContext(1, Ns, "i") as i:
+                    ps_eres[i] << eres
+                    ps_aeff[i] << FunctionCall(
+                        [
+                            self.effective_area("true_energy", "src_pos[i]"),
+                        ],
+                        "log",
+                    )
+            else:
+                ps_eres << eres
+                ps_aeff << FunctionCall(
                     [
-                        self.effective_area("true_energy", "src_pos[i]"),
+                        self.effective_area("true_energy", "src_pos"),
                     ],
                     "log",
                 )
+
             diff[1] << eres
 
             diff[2] << FunctionCall(

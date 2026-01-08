@@ -53,6 +53,12 @@ class Parameter:
         return cls.__par_registry[par_name]
 
     @classmethod
+    def remove_parameter(cls, par_name):
+        if par_name not in cls.__par_registry:
+            raise ValueError("Parameter {} not found".format(par_name))
+        del cls.__par_registry[par_name]
+
+    @classmethod
     def clear_registry(cls):
         """Clear the parameter registry"""
         cls.__par_registry = {}
@@ -105,8 +111,22 @@ class Parameter:
         self._par_range = par_range
 
     def __repr__(self):
-        return "Parameter {} = {}".format(self.name, self.value)
+        return "Parameter {} = {}, fixed = {}".format(self.name, self.value, self.fixed)
 
     def reset(self):
         """Reset value to initial val"""
         self.value = self._initial_val
+
+    def __eq__(self, other):
+        if not isinstance(other, Parameter):
+            raise ValueError
+
+        if (
+            self.value == other.value
+            and np.all(self.par_range == other.par_range)
+            and self.fixed == other.fixed
+            and self.scale == other.scale
+        ):
+            return True
+        else:
+            return False

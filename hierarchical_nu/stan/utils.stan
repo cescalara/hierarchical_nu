@@ -72,18 +72,13 @@ real get_eps_simple(real index, vector index_grid, vector integral_grid, real T)
 vector get_exposure_weights(vector F, vector eps) {
 
   int K = num_elements(eps);
-  vector[K] weights;
-    
-  real normalisation = 0;
-  
-  for (k in 1:K) {
-    normalisation += F[k] * eps[k];
-  }
+  vector[K] weights = F .* eps;
+  return weights / sum(weights);
+}
 
-  for (k in 1:K) {
-    weights[k] = F[k] * eps[k] / normalisation;
-  }
-
+vector get_exposure_weights_from_Nex_et(array[] real Nex) {
+  int K = num_elements(Nex);
+  vector[K] weights = to_vector(Nex) / sum(Nex);
   return weights;
 }
   
@@ -91,6 +86,7 @@ vector get_exposure_weights(vector F, vector eps) {
  * Integral over power law without normalisation, i.e. \int_x1^x2 x^{-gamma}
  */
 real Ngamma(real gamma, real n, real x0, real x1, real x2) {
+
   real idx = n + 1. - gamma;
   if (n + 1. == gamma) {
     return x0^(n+1.) * log(x2/x1);
@@ -142,15 +138,8 @@ real omega_to_dec(vector omega) {
  * Calculate the expected number of detected events from each source.
  */
 real get_Nex(vector F, vector eps) {
-  
-  int K = num_elements(eps);
-  real Nex = 0;
-  
-  for (k in 1:K) {
-    Nex += F[k] * eps[k];
-  }
-  
-  return Nex;
+
+  return sum(F .* eps);
 }
 
 vector get_Nex_vec(vector F, vector eps) {
